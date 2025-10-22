@@ -16,8 +16,8 @@ module readCheckPoints
        &                 minc, lMagMem, fd_stretch, fd_ratio, m_min
    use logic, only: l_rot_ma,l_rot_ic,l_SRIC,l_SRMA,l_cond_ic,l_heat,l_mag,    &
        &            l_mag_LF, l_chemical_conv, l_AB1, l_bridge_step,           &
-       &            l_double_curl, l_z10Mat, l_single_matrix, l_parallel_solve,&
-       &            l_mag_par_solve, l_phase_field
+       &            l_double_curl, l_z10Mat, l_single_matrix,&
+       &            l_phase_field
    use blocking, only: lo_map, lm2l, lm2m, lm_balance, llm, ulm, llmMag, &
        &               ulmMag, st_map
    use init_fields, only: start_file,inform,tOmega_ic1,tOmega_ic2,             &
@@ -115,9 +115,6 @@ contains
       complex(cp), allocatable :: workD(:,:),workE(:,:)
       real(cp), allocatable :: r_old(:), dt_array_old(:)
 
-#ifdef WITH_MPI
-      if ( l_parallel_solve ) call abortRun('! In readStartFields_old with l_parallel_solve=.true.???')
-#endif
 
       if ( rscheme_oc%version == 'cheb') then
          ratio1 = alph1
@@ -816,9 +813,7 @@ contains
       complex(cp), allocatable :: workOld(:,:), work(:,:)
       real(cp), allocatable :: r_old(:), dt_array_old(:)
 
-#ifdef WITH_MPI
-      if ( l_parallel_solve ) call abortRun('! In readStartFields with l_parallel_solve=.true.???')
-#endif
+
 
       if ( rscheme_oc%version == 'cheb') then
          ratio1 = alph1
@@ -1140,7 +1135,7 @@ contains
          allocate( work(1,n_r_max), workOld(1,1), r_old(1), lm2lmo(1) )
       end if
 
-      l_transp = .not. l_parallel_solve
+      l_transp = .true.
 
       !-- Read the poloidal flow
       call read_map_one_field( n_start_file, tscheme, workOld, work, scale_v,    &
@@ -1950,7 +1945,7 @@ contains
       call MPI_File_Set_View(fh, disp, MPI_DEF_COMPLEX, datatype, "native", &
            &                 info, ierr)
 
-      l_transp = l_parallel_solve ! Do we need to transpose d?dt arrays
+      l_transp = .false. ! Do we need to transpose d?dt arrays
       !-- Poloidal potential: w
       call read_map_one_field_mpi(fh, info, datatype, tscheme, workOld,   &
            &                      lm_max_old, n_r_max_old, nRstart_old,   &
@@ -2020,7 +2015,7 @@ contains
       if ( l_phase_field .and. .not. l_phase_field_old ) phi(:,:)=zero
 
       if ( (l_mag .or. l_mag_LF) .and. l_mag_old ) then
-         l_transp = l_mag_par_solve ! Do we need to transpose d?dt arrays
+         l_transp = .false. ! Do we need to transpose d?dt arrays
          !-- Read poloidal potential: b
          call read_map_one_field_mpi(fh, info, datatype, tscheme, workOld,   &
               &                      lm_max_old, n_r_max_old, nRstart_old,   &

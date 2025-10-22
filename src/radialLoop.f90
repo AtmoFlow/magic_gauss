@@ -43,7 +43,7 @@ contains
               &          lRmsCalc,lPressCalc,lPressNext,lViscBcCalc,       &
               &          lFluxProfCalc,lPerpParCalc,lGeosCalc,lHemiCalc,   &
               &          lPhaseCalc,l_probe_out,dsdt,dwdt,dzdt,dpdt,dxidt, &
-              &          dphidt,dbdt,djdt,dVxVhLM,dVxBhLM,dVSrLM,dVXirLM,  &
+              &          dphidt,dbdt,djdt,dVxVhLM,dVxBhLM,dVSrLM,dVXirLM,EtLM,&
               &          lorentz_torque_ic,lorentz_torque_ma,br_vt_lm_cmb, &
               &          br_vp_lm_cmb,br_vt_lm_icb,br_vp_lm_icb,dtrkc,dthkc)
       !
@@ -77,6 +77,7 @@ contains
       complex(cp), intent(out) :: djdt(lm_maxMag,nRstartMag:nRstopMag)
       complex(cp), intent(out) :: dVxVhLM(lm_max,nRstart:nRstop)
       complex(cp), intent(out) :: dVxBhLM(lm_maxMag,nRstartMag:nRstopMag)
+      complex(cp), intent(out) :: EtLM(lm_max,nRstart:nRstop)
 
       !---- Output of nonlinear products for nonlinear
       !     magnetic boundary conditions (needed in s_updateB.f):
@@ -94,7 +95,7 @@ contains
            &             lRmsCalc,lPressCalc,lPressNext,lViscBcCalc,          &
            &             lFluxProfCalc,lPerpParCalc,lGeosCalc,lHemiCalc,      &
            &             lPhaseCalc,l_probe_out,dsdt,dwdt,dzdt,dpdt,dxidt,    &
-           &             dphidt,dbdt,djdt,dVxVhLM,dVxBhLM,dVSrLM,dVXirLM,     &
+           &             dphidt,dbdt,djdt,dVxVhLM,dVxBhLM,dVSrLM,dVXirLM,EtLM,&
            &             lorentz_torque_ic,lorentz_torque_ma, br_vt_lm_cmb,   &
            &             br_vp_lm_cmb,br_vt_lm_icb,br_vp_lm_icb,dtrkc,dthkc)
 

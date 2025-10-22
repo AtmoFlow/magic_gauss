@@ -19,7 +19,7 @@ module rIter_mod
        &            l_cond_ma, l_dtB, l_store_frame, l_movie_oc,     &
        &            l_TO, l_chemical_conv, l_probe, l_full_sphere,   &
        &            l_precession, l_centrifuge, l_adv_curl,          &
-       &            l_double_curl, l_parallel_solve, l_single_matrix,&
+       &            l_double_curl, l_single_matrix,&
        &            l_temperature_diff, l_RMS, l_phase_field,        &
        &            l_onset, l_DTrMagSpec, l_ehd_dep, l_ehd_die
    use radial_data, only: n_r_cmb, n_r_icb, nRstart, nRstop, nRstartMag, &
@@ -47,7 +47,7 @@ module rIter_mod
    use fields, only: s_Rloc, ds_Rloc, z_Rloc, dz_Rloc, p_Rloc,    &
        &             b_Rloc, db_Rloc, ddb_Rloc, aj_Rloc,dj_Rloc,  &
        &             w_Rloc, dw_Rloc, ddw_Rloc, xi_Rloc, omega_ic,&
-       &             omega_ma, phi_Rloc
+       &             omega_ma, phi_Rloc, v_Rloc, dv_Rloc
    use time_schemes, only: type_tscheme
    use physical_parameters, only: ktops, kbots, n_r_LCR, ktopv, kbotv
    use rIteration, only: rIter_t
@@ -96,7 +96,7 @@ contains
               &          lRmsCalc,lPressCalc,lPressNext,lViscBcCalc,          &
               &          lFluxProfCalc,lPerpParCalc,lGeosCalc,lHemiCalc,      &
               &          lPhaseCalc,l_probe_out,dsdt,dwdt,dzdt,dpdt,dxidt,    &
-              &          dphidt,dbdt,djdt,dVxVhLM,dVxBhLM,dVSrLM,dVXirLM,     &
+              &          dphidt,dbdt,djdt,dVxVhLM,dVxBhLM,dVSrLM,dVXirLM,EtLM,&
               &          lorentz_torque_ic,lorentz_torque_ma,br_vt_lm_cmb,    &
               &          br_vp_lm_cmb,br_vt_lm_icb,br_vp_lm_icb,dtrkc,dthkc)
       !
@@ -133,6 +133,7 @@ contains
       complex(cp), intent(out) :: dVXirLM(lm_max,nRstart:nRstop)
       complex(cp), intent(out) :: dVxVhLM(lm_max,nRstart:nRstop)
       complex(cp), intent(out) :: dVxBhLM(lm_maxMag,nRstartMag:nRstopMag)
+      complex(cp), intent(out) :: EtLM(lm_max,nRstart:nRstop)
 
       !---- Output of nonlinear products for nonlinear
       !     magnetic boundary conditions (needed in updateB.f90):
@@ -204,7 +205,7 @@ contains
             &       lPowerCalc .or. lGeosCalc .or. lHemiCalc
          end if
 
-         if ( l_parallel_solve .or. (l_single_matrix .and. l_temperature_diff) ) then
+         if ( (l_single_matrix .and. l_temperature_diff) ) then
             ! We will need the nonlinear terms on ricb for the pressure l=m=0
             ! equation
             lDeriv=.true.
@@ -250,7 +251,7 @@ contains
 
             call phy2lm_counter%start_count()
             call this%transform_to_lm_space(nR, lRmsCalc, dVSrLM(:,nR), dVXirLM(:,nR), &
-                 &                         dphidt(:,nR))
+                 &                         dphidt(:,nR),EtLM(:,nR))
             call phy2lm_counter%stop_count(l_increment=.false.)
          else if ( l_mag ) then
             this%nl_lm%VxBtLM(:)=zero
@@ -483,7 +484,7 @@ contains
       if ( l_conv .or. l_mag_kin ) then
          if ( l_heat ) then
             call scal_to_spat(s_Rloc(:,nR), this%gsa%sc, l_R(nR))
-            if ( lViscBcCalc ) then
+            if ( lViscBcCalc .or. l_ehd_dep) then
                call scal_to_grad_spat(s_Rloc(:,nR), this%gsa%dsdtc, this%gsa%dsdpc, &
                     &                 l_R(nR))
                if ( nR == n_r_cmb .and. ktops==1) then
@@ -505,10 +506,17 @@ contains
          !-- Composition
          if ( l_chemical_conv ) call scal_to_spat(xi_Rloc(:,nR), this%gsa%xic, l_R(nR))
 
+         if (l_ehd_dep) then
+            call scal_to_spat(v_Rloc(:,nR), this%gsa%vc, l_R(nR))
+            call scal_to_grad_spat(v_Rloc(:,nR), this%gsa%dvdtc, this%gsa%dvdpc, &
+                    &                 l_R(nR))
+            call scal_to_spat(dv_Rloc(:,nR), this%gsa%dvdrc, l_R(nR))
+         end if
+
          !-- Phase field
          if ( l_phase_field ) call scal_to_spat(phi_Rloc(:,nR), this%gsa%phic, l_R(nR))
 
-         if ( l_HT .or. lViscBcCalc ) then
+         if ( l_HT .or. lViscBcCalc .or. l_ehd_dep) then
             call scal_to_spat(ds_Rloc(:,nR), this%gsa%drsc, l_R(nR))
          endif
          if ( nBc == 0 ) then ! Bulk points
@@ -612,7 +620,7 @@ contains
 
    end subroutine transform_to_grid_space
 !-------------------------------------------------------------------------------
-   subroutine transform_to_lm_space(this, nR, lRmsCalc, dVSrLM, dVXirLM, dphidt)
+   subroutine transform_to_lm_space(this, nR, lRmsCalc, dVSrLM, dVXirLM, dphidt, Et)
       !
       ! This subroutine actually handles the spherical harmonic transforms from
       ! (\theta,\phi) space to (\ell,m) space.
@@ -628,6 +636,7 @@ contains
       complex(cp), intent(out) :: dVSrLM(lm_max)
       complex(cp), intent(out) :: dVXirLM(lm_max)
       complex(cp), intent(out) :: dphidt(lm_max)
+      complex(cp), intent(out) :: Et(lm_max)
 
       !-- Local variables
       integer :: nPhi, nPhStart, nPhStop
@@ -670,6 +679,9 @@ contains
 
             if ( l_ehd_dep ) then
                this%gsa%Advr(:, nPhi)=this%gsa%Advr(:,nPhi) + this%gsa%DEPFr(:,nPhi)
+               this%gsa%Advt(:, nPhi)=this%gsa%Advt(:,nPhi) + this%gsa%DEPFt(:,nPhi)
+               this%gsa%Advp(:, nPhi)=this%gsa%Advp(:,nPhi) + this%gsa%DEPFp(:,nPhi)
+
             end if   
          end do
          !$omp end parallel
@@ -689,6 +701,10 @@ contains
       if ( l_chemical_conv ) then
          call spat_to_qst(this%gsa%VXir, this%gsa%VXit, this%gsa%VXip, &
               &           dVXirLM, this%nl_lm%VXitLM, this%nl_lm%VXipLM, l_R(nR))
+      end if
+      if ( l_ehd_dep ) then
+         call scal_to_SH(this%gsa%Et, Et, &
+                 &          l_R(nR))
       end if
       if ( l_phase_field ) call scal_to_SH(this%gsa%phiTerms, dphidt,l_R(nR))
       if ( l_mag_nl ) then

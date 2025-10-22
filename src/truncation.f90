@@ -4,7 +4,7 @@ module truncation
    !
 
    use precision_mod, only: cp
-   use logic, only: l_finite_diff, l_cond_ic
+   use logic, only:l_cond_ic
    use useful, only: abortRun
 
    implicit none

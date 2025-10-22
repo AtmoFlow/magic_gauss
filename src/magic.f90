@@ -110,7 +110,7 @@ program magic
    use dtB_mod, only: initialize_dtB_mod, finalize_dtB_mod
    use radial_data, only: initialize_radial_data, finalize_radial_data
    use radialLoop, only: initialize_radialLoop, finalize_radialLoop
-   use LMLoop_mod,only: initialize_LMLoop, finalize_LMLoop, test_LMLoop
+   use LMLoop_mod,only: initialize_LMLoop, finalize_LMLoop
    use preCalculations
    use start_fields, only: getStartFields
    use kinetic_energy
@@ -402,8 +402,6 @@ program magic
       call writeInfo(n_log_file)
       if ( l_save_out ) close(n_log_file)
    end if
-
-   if ( l_parallel_solve ) call test_LMLoop(tscheme)
 
    !--- AND NOW FOR THE TIME INTEGRATION:
 

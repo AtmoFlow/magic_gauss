@@ -627,7 +627,6 @@ module  mpi_ptop_mod
    use mem_alloc
    use parallel_mod
    use truncation, only: l_max, minc
-   use logic, only: l_finite_diff
    use truncation, only: lm_max, n_r_max
    use radial_data, only: nRstart, nRstop, radial_balance
    use blocking, only: lm_balance, st_map, lo_map, llm, ulm
@@ -670,13 +669,8 @@ contains
       integer :: displs(n_fields),displs_on_last(n_fields)
 
 
-      if (.not. l_finite_diff ) then
          nR_main_ranks = (n_r_max-1)/n_procs
          nR_last_rank = nR_main_ranks+1
-      else
-         nR_main_ranks = n_r_max/n_procs
-         nR_last_rank = nR_main_ranks+n_r_max-n_procs*nR_main_ranks
-      end if
 
       allocate(this%s_transfer_type_cont(n_procs,n_fields))
       allocate(this%s_transfer_type_nr_end_cont(n_procs,n_fields))

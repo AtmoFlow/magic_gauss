@@ -14,9 +14,8 @@ module communications
        &                 fd_order, fd_order_bound, m_max, m_min
    use blocking, only: st_map, lo_map, lm_balance, llm, ulm
    use radial_data, only: nRstart, nRstop, radial_balance
-   use logic, only: l_mag, l_conv, l_heat, l_chemical_conv, l_finite_diff, &
-       &            l_mag_kin, l_double_curl, l_save_out, l_packed_transp, &
-       &            l_parallel_solve, l_mag_par_solve
+   use logic, only: l_mag, l_conv, l_heat, l_chemical_conv, &
+       &            l_mag_kin, l_double_curl, l_save_out, l_packed_transp
    use useful, only: abortRun
    use output_data, only: n_log_file, log_file
    use iso_fortran_env, only: output_unit
@@ -216,22 +215,6 @@ contains
       call lo2r_one%create_comm(1)
       call r2lo_one%create_comm(1)
       if ( l_packed_transp ) then
-         if ( l_finite_diff .and. fd_order==2 .and. fd_order_bound==2 ) then
-            if ( l_parallel_solve ) then
-               if ( l_mag .and. (.not. l_mag_par_solve) ) then
-                  call lo2r_flow%create_comm(2)
-                  call r2lo_flow%create_comm(2)
-               end if
-            else
-               if ( l_mag ) then
-                  call lo2r_flow%create_comm(5)
-                  call r2lo_flow%create_comm(5)
-               else
-                  call lo2r_flow%create_comm(3)
-                  call r2lo_flow%create_comm(3)
-               end if
-            end if
-         else
             if ( l_heat ) then
                call lo2r_s%create_comm(2)
                call r2lo_s%create_comm(2)
@@ -254,7 +237,6 @@ contains
                call r2lo_field%create_comm(3)
             end if
          end if
-      end if
 
       ! allocate a temporary array for the gather operations.
       if ( rank == 0 ) then
@@ -277,12 +259,7 @@ contains
       call lo2r_one%destroy_comm()
       call r2lo_one%destroy_comm()
       if ( l_packed_transp ) then
-         if ( l_finite_diff .and. fd_order==2 .and. fd_order_bound==2 ) then
-            if ( (.not. l_parallel_solve) .and. (.not. l_mag_par_solve) ) then
-               call lo2r_flow%destroy_comm()
-               call r2lo_flow%destroy_comm()
-            end if
-         else
+
             if ( l_heat ) then
                call lo2r_s%destroy_comm()
                call r2lo_s%destroy_comm()
@@ -301,7 +278,6 @@ contains
                call r2lo_field%destroy_comm()
             end if
          end if
-      end if
 
       deallocate( temp_gather_lo )
 

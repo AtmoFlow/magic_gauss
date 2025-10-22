@@ -23,7 +23,7 @@ module storeCheckPoints
        &                  omega_ma1,omegaOsz_ma1,tOmega_ma1,        &
        &                  omega_ma2,omegaOsz_ma2,tOmega_ma2
    use logic, only: l_heat, l_mag, l_cond_ic, l_chemical_conv, l_save_out, &
-       &            l_double_curl, l_parallel_solve, l_mag_par_solve,      &
+       &            l_double_curl,      &
        &            l_phase_field
    use output_data, only: tag, log_file, n_log_file
    use charmanip, only: dble2str
@@ -102,13 +102,8 @@ contains
 
 #ifdef WITH_MPI
       if ( m_min == 0 ) then
-         if ( l_parallel_solve ) then
-            call MPI_Bcast(omega_ma1,1,MPI_DEF_REAL,0,MPI_COMM_WORLD,ierr)
-            call MPI_Bcast(omega_ic1,1,MPI_DEF_REAL,n_procs-1,MPI_COMM_WORLD,ierr)
-         else
             call MPI_Bcast(omega_ma1,1,MPI_DEF_REAL,rank_with_l1m0,MPI_COMM_WORLD,ierr)
             call MPI_Bcast(omega_ic1,1,MPI_DEF_REAL,rank_with_l1m0,MPI_COMM_WORLD,ierr)
-         end if
       end if
 #endif
 
@@ -378,13 +373,8 @@ contains
 
 #ifdef WITH_MPI
       if ( m_min == 0 ) then
-         if ( l_parallel_solve ) then
-            call MPI_Bcast(omega_ma1,1,MPI_DEF_REAL,0,MPI_COMM_WORLD,ierr)
-            call MPI_Bcast(omega_ic1,1,MPI_DEF_REAL,n_procs-1,MPI_COMM_WORLD,ierr)
-         else
             call MPI_Bcast(omega_ma1,1,MPI_DEF_REAL,rank_with_l1m0,MPI_COMM_WORLD,ierr)
             call MPI_Bcast(omega_ic1,1,MPI_DEF_REAL,rank_with_l1m0,MPI_COMM_WORLD,ierr)
-         end if
       end if
 #endif
 
@@ -529,7 +519,7 @@ contains
       !--------------------
       !-- Now finally write the fields
       !--------------------
-      l_transp = .not. l_parallel_solve ! Do we need to transpose the d?dt arrays?
+      l_transp = .true. ! Do we need to transpose the d?dt arrays?
 
       !-- Poloidal potential: w
       call write_one_field_mpi(fh, info, datatype, tscheme, w, dwdt, &
@@ -565,7 +555,7 @@ contains
 
       !-- Outer core magnetic field:
       if ( l_mag ) then
-         l_transp = .not. l_mag_par_solve
+         l_transp = .true.
          call write_one_field_mpi(fh, info, datatype, tscheme, b, dbdt, &
               &                   work, size_tmp,  disp, l_transp)
          call write_one_field_mpi(fh, info, datatype, tscheme, aj, djdt, &

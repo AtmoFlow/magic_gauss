@@ -74,9 +74,9 @@ class TestRMSOutputs(unittest.TestCase):
         cmd = '{} {}/input_restart.nml'.format(self.execCmd, self.dir)
         sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
                 stderr=open(os.devnull, 'wb'))
-        cmd = '{} {}/input_FD.nml'.format(self.execCmd, self.dir)
-        sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
-                stderr=open(os.devnull, 'wb'))
+        # cmd = '{} {}/input_FD.nml'.format(self.execCmd, self.dir)
+        # sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
+        #         stderr=open(os.devnull, 'wb'))
         cmd = 'cat dtVrms.start dtBrms.start dtVrms.continue dtBrms.continue dtVrms.FD dtBrms.FD > e_kin.test'
         sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'))
 

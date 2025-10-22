@@ -22,7 +22,7 @@ module start_fields
    use logic, only: l_conv, l_mag, l_cond_ic, l_heat, l_SRMA, l_SRIC,    &
        &            l_mag_kin, l_mag_LF, l_temperature_diff, l_onset,    &
        &            l_chemical_conv, l_anelastic_liquid, l_save_out,     &
-       &            l_parallel_solve, l_mag_par_solve, l_phase_field,    &
+       &            l_phase_field,    &
        &            l_single_matrix, l_non_adia
    use init_fields, only: l_start_file, init_s1, init_b1, tops, pt_cond,  &
        &                  initV, initS, initB, initXi, ps_cond,           &
@@ -40,18 +40,12 @@ module start_fields
    use readCheckPoints, only: readStartFields_mpi
 #endif
    use updateWPS_mod, only: get_single_rhs_imp
-   use updateWP_mod, only: get_pol_rhs_imp, get_pol_rhs_imp_ghost, w_ghost, &
-       &                   fill_ghosts_W, p0_ghost
-   use updateS_mod, only: get_entropy_rhs_imp, get_entropy_rhs_imp_ghost, s_ghost, &
-       &                  fill_ghosts_S
-   use updateXI_mod, only: get_comp_rhs_imp, get_comp_rhs_imp_ghost, xi_ghost, &
-       &                   fill_ghosts_Xi
-   use updatePhi_mod, only: get_phase_rhs_imp, get_phase_rhs_imp_ghost, phi_ghost, &
-       &                   fill_ghosts_Phi
-   use updateZ_mod, only: get_tor_rhs_imp, get_tor_rhs_imp_ghost, z_ghost, &
-       &                  fill_ghosts_Z
-   use updateB_mod, only: get_mag_rhs_imp, get_mag_ic_rhs_imp, b_ghost, aj_ghost, &
-       &                  get_mag_rhs_imp_ghost, fill_ghosts_B
+   use updateWP_mod, only: get_pol_rhs_imp
+   use updateS_mod, only: get_entropy_rhs_imp
+   use updateXI_mod, only: get_comp_rhs_imp
+   use updatePhi_mod, only: get_phase_rhs_imp
+   use updateZ_mod, only: get_tor_rhs_imp
+   use updateB_mod, only: get_mag_rhs_imp, get_mag_ic_rhs_imp
 
 
    implicit none
@@ -330,40 +324,15 @@ contains
       if ( init_phi /= 0 .and. l_phase_field ) call initPhi(s_LMloc, phi_LMloc)
 
       !---- For now fiels initialized in R-distributed arrays: now transpose them if needed
-      if ( l_parallel_solve ) then
-         call lo2r_one%transp_lm2r(w_LMloc, w_Rloc)
-         call lo2r_one%transp_lm2r(z_LMloc, z_Rloc)
-         if ( l_chemical_conv ) call lo2r_one%transp_lm2r(xi_LMloc, xi_Rloc)
-         if ( l_phase_field ) call lo2r_one%transp_lm2r(phi_LMloc, phi_Rloc)
-         if ( l_heat ) call lo2r_one%transp_lm2r(s_LMloc, s_Rloc)
-         call lo2r_one%transp_lm2r(p_LMloc, p_Rloc)
-         if ( l_mag .and. l_mag_par_solve ) then
-            call lo2r_one%transp_lm2r(b_LMloc, b_Rloc)
-            call lo2r_one%transp_lm2r(aj_LMloc, aj_Rloc)
-         end if
-      end if
+     
 
       !----- Assemble initial implicit terms
       if ( l_chemical_conv ) then
-         if ( l_parallel_solve ) then
-            call bulk_to_ghost(xi_Rloc, xi_ghost, 1, nRstart, nRstop, lm_max, 1, lm_max)
-            call exch_ghosts(xi_ghost, lm_max, nRstart, nRstop, 1)
-            call fill_ghosts_Xi(xi_ghost)
-            call get_comp_rhs_imp_ghost(xi_ghost, dxidt, 1, .true.)
-         else
             call get_comp_rhs_imp(xi_LMloc, dxi_LMloc, dxidt, 1, .true.)
-         end if
       end if
 
       if ( l_phase_field ) then
-         if ( l_parallel_solve ) then
-            call bulk_to_ghost(phi_Rloc, phi_ghost, 1, nRstart, nRstop, lm_max, 1, lm_max)
-            call exch_ghosts(phi_ghost, lm_max, nRstart, nRstop, 1)
-            call fill_ghosts_Phi(phi_ghost)
-            call get_phase_rhs_imp_ghost(phi_ghost, dphidt, 1, .true.)
-         else
             call get_phase_rhs_imp(phi_LMloc, dphidt, 1, .true.)
-         end if
       end if
 
       if ( l_single_matrix ) then
@@ -372,58 +341,21 @@ contains
               &                  dpdt, tscheme, 1, .true., .false.)
       else
          if ( l_heat ) then
-            if ( l_parallel_solve ) then
-               call bulk_to_ghost(s_Rloc, s_ghost, 1, nRstart, nRstop, lm_max, 1, lm_max)
-               call exch_ghosts(s_ghost, lm_max, nRstart, nRstop, 1)
-               call fill_ghosts_S(s_ghost)
-               call get_entropy_rhs_imp_ghost(s_ghost, ds_Rloc, dsdt, phi_Rloc, &
-                    &                         1, .true.)
-            else
                call get_entropy_rhs_imp(s_LMloc, ds_LMloc, dsdt, phi_LMloc, 1, .true.)
-            end if
          end if
-         if ( l_parallel_solve ) then
-            call bulk_to_ghost(w_Rloc, w_ghost, 2, nRstart, nRstop, lm_max, 1, lm_max)
-            call bulk_to_ghost(p_Rloc(1,:), p0_ghost, 1, nRstart, nRstop, 1, 1, 1)
-            call exch_ghosts(w_ghost, lm_max, nRstart, nRstop, 2)
-            call fill_ghosts_W(w_ghost, p0_ghost, .true.)
-            call get_pol_rhs_imp_ghost(w_ghost, dw_Rloc, ddw_Rloc, p_Rloc, dp_Rloc,  &
-                 &                     dwdt, tscheme, 1, .true., .false., .false.,   &
-                 &                     dwdt%expl(:,:,1)) ! Work array
-         else
+
             call get_pol_rhs_imp(s_LMloc, xi_LMloc, w_LMloc, dw_LMloc, ddw_LMloc,  &
                  &               p_LMloc, dp_LMloc, dwdt, dpdt, tscheme, 1, .true.,&
                  &               .false., .false., work_LMloc)
-         end if
       end if
-      if ( l_parallel_solve ) then
-         call bulk_to_ghost(z_Rloc, z_ghost, 1, nRstart, nRstop, lm_max, 1, lm_max)
-         call exch_ghosts(z_ghost, lm_max, nRstart, nRstop, 1)
-         call fill_ghosts_Z(z_ghost)
-         call get_tor_rhs_imp_ghost(time, z_ghost, dz_Rloc, dzdt, domega_ma_dt,  &
-              &                     domega_ic_dt, omega_ic, omega_ma, omega_ic1, &
-              &                     omega_ma1, tscheme, 1, .true., .false.)
-      else
          call get_tor_rhs_imp(time, z_LMloc, dz_LMloc, dzdt, domega_ma_dt, &
               &               domega_ic_dt, omega_ic, omega_ma, omega_ic1, &
               &               omega_ma1, tscheme, 1, .true., .false.)
-      end if
 
       if ( l_mag .or. l_mag_kin  ) then
-         if ( l_mag_par_solve ) then
-            call bulk_to_ghost(b_Rloc, b_ghost, 1, nRstart, nRstop, lm_max, 1, lm_max)
-            call bulk_to_ghost(aj_Rloc, aj_ghost, 1, nRstart, nRstop, lm_max, 1, lm_max)
-            call exch_ghosts(aj_ghost, lm_max, nRstart, nRstop, 1)
-            call exch_ghosts(b_ghost, lm_max, nRstart, nRstop, 1)
-            call fill_ghosts_B(b_ghost, aj_ghost)
-            call get_mag_rhs_imp_ghost(b_ghost, db_Rloc, ddb_Rloc, aj_ghost,     &
-                 &                     dj_Rloc, ddj_Rloc, dbdt, djdt, tscheme, 1,&
-                 &                     .true., .false.)
-         else
             call get_mag_rhs_imp(b_LMloc, db_LMloc, ddb_LMloc, aj_LMloc,     &
                  &               dj_LMloc, ddj_LMloc, dbdt, djdt, tscheme, 1,&
                  &               .true., .false.)
-         end if
       end if
       if ( l_cond_ic ) then
          call get_mag_ic_rhs_imp(b_ic_LMloc, db_ic_LMloc, ddb_ic_LMloc,    &
@@ -491,9 +423,6 @@ contains
 
       if ( ampForce /= 0.0_cp ) then
          call initF(bodyForce_LMloc)
-         if ( l_parallel_solve ) then
-            call lo2r_one%transp_lm2r(bodyForce_LMloc, bodyForce_Rloc)
-         end if
       end if
 
    end subroutine getStartFields

@@ -68,11 +68,11 @@ class VariableProperties(unittest.TestCase):
         sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
                 stderr=open(os.devnull, 'wb'))
         # Second run the Finite Differences case
-        cmd = '{} {}/inputFD.nml'.format(self.execCmd, self.dir)
-        sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
-                stderr=open(os.devnull, 'wb'))
-        cmd = 'cat e_kin.cheb e_kin.map e_kin.fd > e_kin.test'
-        sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'))
+        # cmd = '{} {}/inputFD.nml'.format(self.execCmd, self.dir)
+        # sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
+        #         stderr=open(os.devnull, 'wb'))
+        # cmd = 'cat e_kin.cheb e_kin.map e_kin.fd > e_kin.test'
+        # sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'))
 
     def tearDown(self):
         # Cleaning when leaving

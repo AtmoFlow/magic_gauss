@@ -13,7 +13,7 @@ module radial_functions
    use logic, only: l_mag, l_cond_ic, l_heat, l_anelastic_liquid,  &
        &            l_isothermal, l_anel, l_non_adia, l_centrifuge,&
        &            l_temperature_diff, l_single_matrix, l_var_l,  &
-       &            l_finite_diff, l_newmap, l_full_sphere,        &
+       &            l_newmap, l_full_sphere,        &
        &            l_chemical_conv
    use radial_data, only: nRstart, nRstop
    use chebyshev_polynoms_mod ! Everything is needed
@@ -167,8 +167,6 @@ contains
          bytes_allocated = bytes_allocated+n_r_ic_max*SIZEOF_DEF_REAL
       end if
 
-      if ( .not. l_finite_diff ) then
-
          allocate( cheb_int(n_r_max) )         ! array for cheb integrals !
          bytes_allocated = bytes_allocated + n_r_max*SIZEOF_DEF_REAL
 
@@ -181,14 +179,6 @@ contains
             n_in_2 = 0
          end if
 
-      else
-
-         allocate ( type_fd :: rscheme_oc )
-
-         n_in   = fd_order
-         n_in_2 = fd_order_bound
-
-      end if
       call rscheme_oc%initialize(n_r_max,n_in,n_in_2)
 
    end subroutine initialize_radial_functions
@@ -215,7 +205,7 @@ contains
          if ( n_r_ic_max > 0 .and. l_cond_ic ) call chebt_ic_even%finalize()
       end if
 
-      if ( .not. l_finite_diff ) deallocate( cheb_int )
+      deallocate( cheb_int )
 
       call rscheme_oc%finalize()
 
@@ -247,13 +237,8 @@ contains
       r_cmb=one/(one-radratio)
       r_icb=r_cmb-one
 
-      if ( .not. l_finite_diff ) then
          ratio1=alph1
          ratio2=alph2
-      else
-         ratio1=fd_stretch
-         ratio2=fd_ratio
-      end if
 
       call rscheme_oc%get_grid(n_r_max, r_icb, r_cmb, ratio1, ratio2, r)
       call rscheme_oc%get_der_mat(n_r_max)
@@ -784,13 +769,11 @@ contains
       end if
 
       !-- Factors for cheb integrals:
-      if ( .not. l_finite_diff ) then
          cheb_int(1)=one   ! Integration constant chosen !
          do n_cheb=3,n_r_max,2
             cheb_int(n_cheb)  =-one/real(n_cheb*(n_cheb-2),kind=cp)
             cheb_int(n_cheb-1)= 0.0_cp
          end do
-      end if
 
       !-- Proceed with inner core:
 

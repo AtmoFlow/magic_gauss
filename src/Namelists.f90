@@ -77,7 +77,7 @@ contains
       &    mpi_transp,l_adv_curl,mpi_packing
 
       namelist/phys_param/                                        &
-      &    ra,rae,rat,raxi,pr,sc,prmag,ek,gamma,epsc0,epscxi0,radratio,Bn,      &
+      &    ra,rae,rat,raxi,pr,sc,prmag,ek,gamma,gamma_e,epsc0,epscxi0,radratio,Bn,      &
       &    ktops,kbots,ktopv,kbotv,ktopb,kbotb,kbotxi,ktopxi,     &
       &    s_top,s_bot,impS,sCMB,xi_top,xi_bot,impXi,xiCMB,       &
       &    nVarCond,con_DecRate,con_RadRatio,con_LambdaMatch,     &
@@ -276,13 +276,6 @@ contains
          l_double_curl = .false.
       end if
 
-      call capitalize(radial_scheme)
-      if ( index(radial_scheme, 'FD') /= 0 ) then
-         l_finite_diff = .true.
-      else
-         l_finite_diff = .false.
-      end if
-
       !-- Select the kind of time-integrator (multi-step or implicit R-K):
       call select_tscheme(time_scheme, tscheme)
 
@@ -294,13 +287,6 @@ contains
           if ( radial_scheme == 'CHEB' .and. n_r_max /= n_cheb_max ) then
             call abortRun('n_r_max should be equal to n_cheb_max for this setup !')
           end if
-      end if
-
-      if ( l_finite_diff ) then
-         l_double_curl=.true.
-         l_PressGraph =.false.
-         l_newmap     =.false.
-         if ( rank == 0 ) write(output_unit,*) '! Finite differences are used: I use the double-curl form !'
       end if
 
       n_stores=max(n_stores,n_rsts)
@@ -508,8 +494,6 @@ contains
       if ( ktops > 2 .or. kbots > 2 ) then
          l_single_matrix    = .true.
       end if
-
-      if ( l_finite_diff ) l_single_matrix = .false.
 
       if ( l_chemical_conv .and. l_single_matrix ) then
          l_single_matrix = .false.
@@ -833,18 +817,8 @@ contains
       !-- time averaging of spectra
       if ( l_average ) l_spec_avg= .true.
 
-      if ( l_finite_diff .and. fd_order==2 .and. fd_order_bound==2 .and. &
-      &    (.not. l_single_matrix) ) then
-         l_parallel_solve = .true.
-      else
-         l_parallel_solve = .false.
-      end if
-
       !-- Disable for now
       !l_parallel_solve = .false.
-
-      l_mag_par_solve = .false.
-      if ( l_mag .and. (.not. l_cond_ic) .and. l_parallel_solve ) l_mag_par_solve=.true.
 
    end subroutine readNamelists
 !------------------------------------------------------------------------------
@@ -945,6 +919,7 @@ contains
       write(n_out,'(''  prmag           ='',ES14.6,'','')') prmag
       write(n_out,'(''  ek              ='',ES14.6,'','')') ek
       write(n_out,'(''  gamma           ='',ES14.6,'','')') gamma
+      write(n_out,'(''  gamma_e         ='',ES14.6,'','')') gamma_e
       write(n_out,'(''  po              ='',ES14.6,'','')') po
       write(n_out,'(''  stef            ='',ES14.6,'','')') stef
       write(n_out,'(''  tmelt           ='',ES14.6,'','')') tmelt
@@ -1355,6 +1330,7 @@ contains
       l_update_b    =.true.
       l_update_s    =.true.
       l_update_xi   =.true.
+      l_update_ehd   =.true.
       l_update_phi  =.true.
       l_correct_AMe =.false.  ! Correct equatorial AM
       l_correct_AMz =.false.  ! Correct axial AM

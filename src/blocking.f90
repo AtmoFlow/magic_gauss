@@ -8,7 +8,7 @@ module blocking
    use mem_alloc, only: memWrite, bytes_allocated
    use parallel_mod, only: nThreads, rank, n_procs, rank_with_l1m0, load, getBlocks
    use truncation, only: lm_max, l_max, n_theta_max, minc, n_r_max, m_max, m_min
-   use logic, only: l_save_out, l_finite_diff, l_mag
+   use logic, only: l_save_out, l_mag
    use output_data, only: n_log_file, log_file
    use LMmapping, only: mappings, allocate_mappings, deallocate_mappings,           &
        &                allocate_subblocks_mappings, deallocate_subblocks_mappings, &
@@ -84,7 +84,6 @@ contains
       sizeLMB=(lm_max-1)/n_procs+1
 
       !--- Get radial blocking
-      if ( .not. l_finite_diff ) then
          if ( mod(n_r_max-1,n_procs) /= 0 ) then
             if ( rank == 0 ) then
                write(output_unit,*) 'Number of MPI ranks has to be multiple of n_r_max-1!'
@@ -93,7 +92,6 @@ contains
             end if
             call abortRun('Stop run in blocking')
          end if
-      end if
 
       !-- Get firt-touch LM blocking
       allocate( lm_balance(0:n_procs-1) )
