@@ -18,7 +18,7 @@ module init_fields
        &                      phi, cosTheta, hdif_B
    use logic, only: l_rot_ic, l_rot_ma, l_SRIC, l_SRMA, l_cond_ic,  &
        &            l_temperature_diff, l_chemical_conv, l_onset,   &
-       &            l_anelastic_liquid, l_non_adia, l_finite_diff
+       &            l_anelastic_liquid, l_non_adia, l_ehd_dep
    use radial_functions, only: r_icb, r, r_cmb, r_ic, or1, jVarCon,    &
        &                       lambda, or2, dLlambda, or3, cheb_ic,    &
        &                       dcheb_ic, d2cheb_ic, cheb_norm_ic, or1, &
@@ -75,6 +75,10 @@ module init_fields
    complex(cp), public, allocatable :: topxi(:,:)
    complex(cp), public, allocatable :: botxi(:,:)
 
+   !----- Electric potential
+   complex(cp), public, allocatable :: tope(:,:)
+   complex(cp), public, allocatable :: bote(:,:)
+
    !---- Phase field
    real(cp), public :: phi_top ! Phase field value at the outer boundary
    real(cp), public :: phi_bot ! Phase field value at the inner boundary
@@ -130,6 +134,16 @@ contains
          bytes_allocated = bytes_allocated+2*(l_max+1)*(m_max+1)*SIZEOF_DEF_COMPLEX
       end if
 
+      if ( l_ehd_dep ) then
+         allocate( tope(0:l_max,0:m_max), bote(0:l_max,0:m_max) )
+         tope(:,:)=zero
+         bote(:,:)=zero
+         bote(0,0)=sq4pi
+         tope(0,0)=0.0_cp
+         bytes_allocated = bytes_allocated+2*(l_max+1)*(m_max+1)*SIZEOF_DEF_COMPLEX
+      end if
+
+
    end subroutine initialize_init_fields
 !------------------------------------------------------------------------------
    subroutine finalize_init_fields
@@ -138,6 +152,7 @@ contains
       !
       deallocate (tops, bots )
       if ( l_chemical_conv ) deallocate( topxi, botxi )
+      if ( l_ehd_dep ) deallocate( tope, bote )
 
    end subroutine finalize_init_fields
 !------------------------------------------------------------------------------
@@ -1800,19 +1815,8 @@ contains
       real(cp) :: rhs(n_r_max), dat(n_r_max,n_r_max)
       class(type_realmat), pointer :: xi0Mat
 
-      if ( l_finite_diff ) then
-         allocate( type_bandmat :: xi0Mat )
-         if ( ktopxi == 1 .and. kbotxi == 1 .and. rscheme_oc%order <= 2 &
-         &    .and. rscheme_oc%order_boundary <= 2 ) then
-            n_bands = rscheme_oc%order+1
-         else
-            n_bands = max(2*rscheme_oc%order_boundary+1,rscheme_oc%order+1)
-         end if
-         call xi0Mat%initialize(n_bands,n_r_max,l_pivot=.true.)
-      else
-         allocate( type_densemat :: xi0Mat )
-         call xi0Mat%initialize(n_r_max,n_r_max,l_pivot=.true.)
-      end if
+      allocate( type_densemat :: xi0Mat )
+      call xi0Mat%initialize(n_r_max,n_r_max,l_pivot=.true.)
 
       !-- Set Matrix:
       do n_r_out=1,n_r_max

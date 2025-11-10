@@ -23,7 +23,7 @@ module grid_space_arrays_mod
    use radial_functions, only: or2, orho1, beta, otemp1, visc, r, or3, &
        &                       lambda, or4, or1
    use physical_parameters, only: radratio, LFfac, n_r_LCR, prec_angle, ViscHeatFac,    &
-        &                         oek, po, dilution_fac, ra, rae, rat, gamma, opr, OhmLossFac, &
+        &                         oek, po, dilution_fac, ra, rae, rat, gamma, gamma_e, opr, OhmLossFac, &
         &                         epsPhase, phaseDiffFac, penaltyFac, tmelt
    use horizontal_data, only: sinTheta, cosTheta, phi, O_sin_theta_E2, &
        &                      cosn_theta_E2, O_sin_theta
@@ -46,7 +46,7 @@ module grid_space_arrays_mod
       real(cp), allocatable :: VSr(:,:), VSt(:,:), VSp(:,:)
       real(cp), allocatable :: VXir(:,:), VXit(:,:), VXip(:,:)
       real(cp), allocatable :: heatTerms(:,:), phiTerms(:,:)
-      real(cp), allocatable :: DEPFr(:,:)
+      real(cp), allocatable :: DEPFr(:,:), DEPFt(:,:), DEPFp(:,:), Et(:,:)
 
       !----- Fields calculated from these help arrays by legtf:
       real(cp), allocatable :: vrc(:,:), vtc(:,:), vpc(:,:)
@@ -56,8 +56,10 @@ module grid_space_arrays_mod
       real(cp), allocatable :: dvtdpc(:,:), dvpdpc(:,:)
       real(cp), allocatable :: brc(:,:), btc(:,:), bpc(:,:)
       real(cp), allocatable :: cbrc(:,:), cbtc(:,:), cbpc(:,:)
-      real(cp), allocatable :: pc(:,:), xic(:,:), cvtc(:,:), cvpc(:,:)
+      real(cp), allocatable :: pc(:,:), xic(:,:), vc(:,:), cvtc(:,:), cvpc(:,:)
       real(cp), allocatable :: dsdtc(:,:), dsdpc(:,:), phic(:,:)
+      real(cp), allocatable :: dvdrc(:,:), dvdtc(:,:), dvdpc(:,:)
+
 
    contains
 
@@ -184,9 +186,19 @@ contains
       end if
 
       if ( l_ehd_dep ) then
-         allocate( this%DEPFr(nlat_padded,n_phi_max) )
+         allocate(this%vc(nlat_padded,n_phi_max), this%dvdrc(nlat_padded,n_phi_max) )
+         this%vc(:,:)=0.0_cp
+         this%dvdrc(:,:)=0.0_cp
+         allocate(this%dvdtc(nlat_padded,n_phi_max), this%dvdpc(nlat_padded,n_phi_max) )
+         this%dvdtc(:,:)=0.0_cp
+         this%dvdpc(:,:)=0.0_cp
+         allocate(this%Et(nlat_padded,n_phi_max), this%DEPFr(nlat_padded,n_phi_max) )
+         this%Et(:,:)=0.0_cp
          this%DEPFr(:,:)=0.0_cp
-         bytes_allocated=bytes_allocated + 1*n_phi_max*nlat_padded*SIZEOF_DEF_REAL
+         allocate(this%DEPFt(nlat_padded,n_phi_max), this%DEPFp(nlat_padded,n_phi_max) )
+         this%DEPFt(:,:)=0.0_cp
+         this%DEPFp(:,:)=0.0_cp
+         bytes_allocated=bytes_allocated + 6*n_phi_max*nlat_padded*SIZEOF_DEF_REAL
          end if
          
    end subroutine initialize
@@ -202,7 +214,7 @@ contains
       deallocate( this%VxBr, this%VxBt, this%VxBp, this%VSr, this%VSt, this%VSp )
       if ( l_chemical_conv ) deallocate( this%VXir, this%VXit, this%VXip )
       if ( l_precession ) deallocate( this%PCr, this%PCt, this%PCp )
-      if ( l_ehd_dep ) deallocate( this%DEPFr )
+      if ( l_ehd_dep ) deallocate( this%DEPFr, this%DEPFt, this%DEPFp, this%Et)
       if ( l_centrifuge ) deallocate( this%CAr, this%CAt )
       if ( l_adv_curl ) deallocate( this%cvtc, this%cvpc )
       if ( l_phase_field ) deallocate( this%phic, this%phiTerms )
@@ -215,6 +227,8 @@ contains
       deallocate( this%brc,this%btc,this%bpc,this%cbrc,this%cbtc,this%cbpc )
       deallocate( this%sc,this%drSc, this%pc, this%xic )
       deallocate( this%dsdtc, this%dsdpc )
+      if ( l_ehd_dep ) deallocate( this%vc , this%dvdrc, this%dvdtc, this%dvdpc)
+
 
    end subroutine finalize
 !----------------------------------------------------------------------------
@@ -266,9 +280,27 @@ contains
          end if      ! Lorentz force required ?
 
          if ( l_ehd_dep .and. (nBc == 0 .or. lRmsCalc) .and. nR>n_r_LCR ) then
+            this%Et(:,nPhi) = gamma_e * ( &
+                    &            this%drSc(:,nPhi)  * this%dvdrc(:,nPhi)  &
+                    &  + or2(nR) * O_sin_theta_E2(:) * this%dsdtc(:,nPhi) * this%dvdtc(:,nPhi)   &
+                    &  + or2(nR) * O_sin_theta_E2(:) * this%dsdpc(:,nPhi) * this%dvdpc(:,nPhi)   &
+                    ) / ( 1 - gamma_e * this%sc(:,nPhi))
             !------ Get the dielectrophoretic force:
-            !---- r**2* RaE * eta**2 / (1-eta)**4 * Sc / r**5
-            this%DEPFr(:,nPhi)=  rae * opr *  radratio**2/(1.0D0-radratio)**4 * this%sc(:,nPhi) * or3(nR)
+            this%DEPFr(:,nPhi)= r(nR)**2 * rae/4 * opr * (                       &
+                    &                                 this%dvdrc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdtc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdpc(:,nPhi)**2      &
+                    & ) * this%drSc(:,nPhi)
+            this%DEPFt(:,nPhi)=  or1(nR) * rae/4 * opr * (                       &
+                    &                                 this%dvdrc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdtc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdpc(:,nPhi)**2      &
+                    & ) * or1(nR) * this%dsdtc(:,nPhi)
+            this%DEPFp(:,nPhi)=  or1(nR) * rae/4 * opr * (                       &
+                    &                                 this%dvdrc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdtc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdpc(:,nPhi)**2      &
+                    & ) *  or1(nR)  * this%dsdpc(:,nPhi)
          end if      ! DEP force required ?
 
          if ( l_conv_nl .and. (nBc == 0 .or. lRmsCalc) ) then
@@ -458,7 +490,11 @@ contains
 
          if ( l_ehd_die ) then
             this%heatTerms(:,nPhi)= &
-            &  opr * rae/rat * radratio**2/(1.0D0-radratio)**4 * or4(nR)
+            &  opr * rae/rat * (       &
+                    &                                 this%dvdrc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdtc(:,nPhi)**2      &
+                    & + or2(nR) * O_sin_theta_E2(:) * this%dvdpc(:,nPhi)**2      &
+                    & )
          end if
       end do
       !$omp end parallel

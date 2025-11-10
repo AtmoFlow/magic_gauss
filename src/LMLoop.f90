@@ -15,9 +15,9 @@ module LMLoop_mod
    use blocking, only: lo_map, llm, ulm, llmMag, ulmMag, st_map
    use logic, only: l_mag, l_conv, l_heat, l_single_matrix, l_double_curl, &
        &            l_chemical_conv, l_cond_ic, l_onset, l_z10mat,         &
-       &            l_parallel_solve, l_mag_par_solve, l_phase_field,      &
+       &            l_phase_field, l_ehd_dep,     &
        &            l_update_s, l_update_xi, l_update_phi, l_update_v,     &
-       &            l_update_b
+       &            l_update_b, l_update_ehd
    use time_array, only: type_tarray, type_tscalar
    use time_schemes, only: type_tscheme
    use timing, only: timer_type
@@ -27,6 +27,7 @@ module LMLoop_mod
    use updateWPS_mod
    use updateB_mod
    use updateXi_mod
+   use updateV_mod
    use updatePhi_mod
 
    implicit none
@@ -38,8 +39,7 @@ module LMLoop_mod
    integer, allocatable :: array_of_requests(:)
 
    public :: LMLoop, initialize_LMLoop, finalize_LMLoop, finish_explicit_assembly, &
-   &         assemble_stage, finish_explicit_assembly_Rdist, LMLoop_Rdist,         &
-   &         test_LMLoop, assemble_stage_Rdist
+   &         assemble_stage
 
 contains
 
@@ -65,6 +65,8 @@ contains
 
       if ( l_chemical_conv ) call initialize_updateXi()
 
+      if (l_ehd_dep) call initialize_updatev()
+
       if ( l_phase_field ) then
          call initialize_updatePhi()
       else
@@ -77,71 +79,7 @@ contains
 
       call memWrite('LMLoop.f90',local_bytes_used)
 
-      if ( l_parallel_solve ) then
-         if ( l_conv ) then
-            n_tri  =1 ! z equation
-            n_penta=1 ! w equation
-         end if
-         if ( l_heat ) n_tri = n_tri+1
-         if ( l_chemical_conv ) n_tri = n_tri+1
-         if ( l_mag_par_solve ) n_tri = n_tri+2
-
-         block_sze=50
-         n_requests=10
-         nblocks = lm_max
-         nblocks = set_block_number(nblocks)
-         allocate( array_of_requests(n_requests))
-
-      end if
-
    end subroutine initialize_LMLoop
-!----------------------------------------------------------------------------
-   subroutine test_LMLoop(tscheme)
-      !
-      ! This subroutine is used to solve dummy linear problem to estimate the best
-      ! blocking size. This is done once at the initialisation stage of MagIC.
-      !
-
-      !-- Input variables:
-      class(type_tscheme), intent(in) :: tscheme ! time scheme
-
-      !-- Local variable
-      real(cp) :: dum1, dum2
-      type(type_tarray) :: dummy
-      type(type_tscalar) :: dum_scal
-
-      lWPmat(:)=.false.
-      if ( l_heat ) lSmat(:) =.false.
-      lZmat(:) =.false.
-      if ( l_mag ) lBmat(:) =.false.
-      if ( l_chemical_conv ) lXimat(:)=.false.
-
-#ifdef WITH_MPI
-      call MPI_Barrier(MPI_COMM_WORLD,ierr)
-#endif
-      call dum_scal%initialize(tscheme%nold, tscheme%nexp, tscheme%nimp)
-      call dummy%initialize(1, lm_max, nRstart, nRstop, tscheme%nold, tscheme%nexp,&
-           &                tscheme%nimp, l_allocate_exp=.true.)
-
-      if ( l_heat ) call prepareS_FD(tscheme, dummy, phi_Rloc)
-      if ( l_chemical_conv ) call prepareXi_FD(tscheme, dummy)
-      if ( l_conv ) then
-         call prepareZ_FD(0.0_cp, tscheme, dummy, omega_ma, omega_ic, dum_scal, &
-              &           dum_scal, dum1, dum2)
-         call prepareW_FD(0.0_cp, tscheme, dummy, .false.)
-      end if
-      if ( l_mag_par_solve ) call prepareB_FD(0.0_cp, tscheme, dummy, dummy)
-
-      call find_faster_block() ! Find the fastest blocking
-
-#ifdef WITH_MPI
-      call MPI_Barrier(MPI_COMM_WORLD, ierr)
-#endif
-
-      call dum_scal%finalize()
-      call dummy%finalize()
-
-   end subroutine test_LMLoop
 !----------------------------------------------------------------------------
    subroutine finalize_LMLoop(tscheme)
       !
@@ -161,20 +99,22 @@ contains
       call finalize_updateZ()
 
       if ( l_chemical_conv ) call finalize_updateXi()
+
+      if ( l_ehd_dep ) call finalize_updateV()
+
       if ( l_phase_field ) then
          call finalize_updatePhi()
       else
          deallocate( phi_ghost )
       end if
       if ( l_mag ) call finalize_updateB()
-      if ( l_parallel_solve ) deallocate(array_of_requests)
 
    end subroutine finalize_LMLoop
 !----------------------------------------------------------------------------
    subroutine LMLoop(time,timeNext,tscheme,lMat,lRmsNext,lPressNext,     &
               &      dsdt,dwdt,dzdt,dpdt,dxidt,dphidt,dbdt,djdt,dbdt_ic, &
               &      djdt_ic,domega_ma_dt,domega_ic_dt,                  &
-              &      b_nl_cmb,aj_nl_cmb,aj_nl_icb)
+              &      b_nl_cmb,aj_nl_cmb,aj_nl_icb, Et_LMloc)
       !
       !  This subroutine performs the actual time-stepping. It calls succesively
       !  the update routines of the various fields.
@@ -190,6 +130,8 @@ contains
       complex(cp),         intent(in) :: b_nl_cmb(lm_max)   ! nonlinear bc for b at CMB
       complex(cp),         intent(in)  :: aj_nl_cmb(lm_max)  ! nonlinear bc for aj at CMB
       complex(cp),         intent(in)  :: aj_nl_icb(lm_max)  ! nonlinear bc for dr aj at ICB
+      complex(cp),         intent(inout) :: Et_LMloc(llm:ulm,n_r_max)
+
 
       !--- Input from radialLoop:
       type(type_tarray),  intent(inout) :: dsdt, dxidt, dwdt, dpdt, dzdt, dphidt
@@ -232,6 +174,10 @@ contains
          call updateXi(xi_LMloc, dxi_LMloc, dxidt, tscheme)
       end if
 
+      if ( l_ehd_dep .and. l_update_ehd ) then
+        call updateV(v_LMloc, dv_LMloc, Et_LMloc, tscheme)
+      end if
+
       if ( l_conv .and. l_update_v ) then
          PERFON('up_Z')
          call updateZ( time, timeNext, z_LMloc, dz_LMloc, dzdt, omega_ma,  &
@@ -271,121 +217,6 @@ contains
 
       PERFOFF
    end subroutine LMLoop
-!--------------------------------------------------------------------------------
-   subroutine LMLoop_Rdist(time,timeNext,tscheme,lMat,lRmsNext,lPressNext,    &
-              &            lP00Next,dsdt,dwdt,dzdt,dpdt,dxidt,dphidt,dbdt,    &
-              &            djdt,dbdt_ic,djdt_ic,domega_ma_dt,domega_ic_dt,    &
-              &            b_nl_cmb,aj_nl_cmb,aj_nl_icb)
-      !
-      !  This subroutine performs the actual time-stepping. It calls succesively
-      !  the update routines of the various fields. This is used with the parallel
-      !  finite difference solver.
-      !
-
-      !-- Input of variables:
-      class(type_tscheme), intent(in) :: tscheme
-      real(cp),            intent(in) :: time
-      real(cp),            intent(in) :: timeNext
-      logical,             intent(in) :: lMat
-      logical,             intent(in) :: lRmsNext
-      logical,             intent(in) :: lPressNext
-      logical,             intent(in) :: lP00Next ! Do wee need p00 pressure on next log
-      complex(cp),         intent(in) :: b_nl_cmb(lm_max)   ! nonlinear bc for b at CMB
-      complex(cp),         intent(in)  :: aj_nl_cmb(lm_max)  ! nonlinear bc for aj at CMB
-      complex(cp),         intent(in)  :: aj_nl_icb(lm_max)  ! nonlinear bc for dr aj at ICB
-      !--- Input from radialLoop:
-      type(type_tarray),  intent(inout) :: dsdt, dxidt, dwdt, dpdt, dzdt, dphidt
-      type(type_tarray),  intent(inout) :: dbdt, djdt, dbdt_ic, djdt_ic
-      type(type_tscalar), intent(inout) :: domega_ic_dt, domega_ma_dt
-
-      !-- Local variables
-      real(cp) :: dom_ic, dom_ma
-      logical :: lPress
-
-      lPress = lPressNext .or. lP00Next
-
-      if ( lMat ) then ! update matrices:
-         lZ10mat=.false.
-         lWPmat(:)=.false.
-         if ( l_heat ) lSmat(:) =.false.
-         lZmat(:) =.false.
-         if ( l_mag ) lBmat(:) =.false.
-         if ( l_chemical_conv ) lXimat(:)=.false.
-         if ( l_phase_field ) lPhimat(:)=.false.
-      end if
-
-      !-- Phase field needs to be computed first on its own to allow a proper
-      !-- advance of temperature afterwards
-      if ( l_phase_field .and. l_update_phi ) then
-         call preparePhase_FD(tscheme, dphidt)
-         call parallel_solve_phase(block_sze)
-         call fill_ghosts_Phi(phi_ghost)
-         call updatePhase_FD(phi_Rloc, dphidt, tscheme)
-      end if
-
-      !-- Mainly assemble the r.h.s. and rebuild the matrices if required
-      if ( l_heat .and. l_update_s ) call prepareS_FD(tscheme, dsdt, phi_Rloc)
-      if ( l_chemical_conv .and. l_update_xi ) call prepareXi_FD(tscheme, dxidt)
-      if ( l_conv .and. l_update_v ) then
-         call prepareZ_FD(time, tscheme, dzdt, omega_ma, omega_ic, domega_ma_dt, &
-              &           domega_ic_dt, dom_ma, dom_ic)
-         if ( l_z10mat ) call z10Mat_FD%solver_single(z10_ghost, nRstart, nRstop)
-         call prepareW_FD(time, tscheme, dwdt, lPress)
-         if ( lPress ) call p0Mat_FD%solver_single(p0_ghost, nRstart, nRstop)
-      end if
-      if ( l_mag_par_solve .and. l_update_b ) call prepareB_FD(time, tscheme, dbdt, djdt)
-
-      !-----------------------------------------------------------
-      !--- This is where the matrices are solved
-      !-- Here comes the real deal:
-      call solve_counter%start_count()
-      call parallel_solve(block_sze)
-      call solve_counter%stop_count()
-      !-----------------------------------------------------------
-
-      !-- Copy z10 into z_ghost after solving when needed
-      if ( l_z10Mat ) z_ghost(st_map%lm2(1,0),:)=cmplx(real(z10_ghost(:)),0.0_cp,cp)
-
-      !-- Now simply fill the ghost zones to ensure the boundary conditions
-      if ( l_heat .and. l_update_s ) call fill_ghosts_S(s_ghost)
-      if ( l_chemical_conv .and. l_update_xi ) call fill_ghosts_Xi(xi_ghost)
-      if ( l_conv .and. l_update_v ) then
-         call fill_ghosts_Z(z_ghost)
-         call fill_ghosts_W(w_ghost, p0_ghost, lPress)
-      end if
-      if ( l_mag_par_solve .and. l_update_b ) call fill_ghosts_B(b_ghost, aj_ghost)
-
-      !-- Finally build the radial derivatives and the arrays for next iteration
-      if ( l_heat .and. l_update_s ) then
-         call updateS_FD(s_Rloc, ds_Rloc, dsdt, phi_Rloc, tscheme)
-      end if
-      if ( l_chemical_conv .and. l_update_xi ) then
-         call updateXi_FD(xi_Rloc, dxidt, tscheme)
-      end if
-
-      if ( l_update_v ) then
-         call updateZ_FD(time, timeNext, dom_ma, dom_ic, z_Rloc, dz_Rloc, dzdt, &
-              &          omega_ma, omega_ic, domega_ma_dt, domega_ic_dt,        &
-              &          tscheme, lRmsNext)
-         call updateW_FD(w_Rloc, dw_Rloc, ddw_Rloc, dwdt, p_Rloc, dp_Rloc, dpdt,&
-              &          tscheme, lRmsNext, lPressNext, lP00Next)
-      end if
-
-      if ( l_mag .and. l_update_b ) then
-         if ( l_mag_par_solve ) then
-            call updateB_FD(b_Rloc, db_Rloc, ddb_Rloc, aj_Rloc, dj_Rloc, &
-                 &          ddj_Rloc, dbdt, djdt, tscheme, lRmsNext)
-
-         else
-            call updateB( b_LMloc,db_LMloc,ddb_LMloc,aj_LMloc,dj_LMloc,ddj_LMloc, &
-                 &        dbdt, djdt, b_ic_LMloc, db_ic_LMloc, ddb_ic_LMloc,      &
-                 &        aj_ic_LMloc, dj_ic_LMloc, ddj_ic_LMloc, dbdt_ic,        &
-                 &        djdt_ic, b_nl_cmb, aj_nl_cmb, aj_nl_icb, time, tscheme, &
-                 &        lRmsNext )
-         end if
-      end if
-
-   end subroutine LMLoop_Rdist
 !--------------------------------------------------------------------------------
    subroutine finish_explicit_assembly(omega_ma, omega_ic, w, b_ic, aj_ic,        &
               &                        dVSr_LMloc, dVXir_LMloc, dVxVh_LMloc,      &
@@ -452,66 +283,6 @@ contains
 
    end subroutine finish_explicit_assembly
 !--------------------------------------------------------------------------------
-   subroutine finish_explicit_assembly_Rdist(omega_ma, omega_ic, w, b_ic, aj_ic,  &
-              &                              dVSr_Rloc, dVXir_Rloc, dVxVh_Rloc,   &
-              &                              dVxBh_Rloc, lorentz_torque_ma,       &
-              &                              lorentz_torque_ic, dsdt_Rloc,        &
-              &                              dxidt_Rloc, dwdt_Rloc, djdt_Rloc,    &
-              &                              dbdt_ic, djdt_ic, domega_ma_dt,      &
-              &                              domega_ic_dt, tscheme)
-      !
-      ! This subroutine is used to finish the computation of the explicit terms.
-      ! This is the version that handles R-distributed arrays used when FD are
-      ! employed.
-      !
-
-      !-- Input variables
-      class(type_tscheme), intent(in) :: tscheme
-      real(cp),            intent(in) :: omega_ma
-      real(cp),            intent(in) :: omega_ic
-      real(cp),            intent(in) :: lorentz_torque_ic
-      real(cp),            intent(in) :: lorentz_torque_ma
-      complex(cp),         intent(in) :: w(lm_max,nRstart:nRstop)
-      complex(cp),         intent(in) :: b_ic(llmMag:ulmMag,n_r_ic_max)
-      complex(cp),         intent(in) :: aj_ic(llmMag:ulmMag,n_r_ic_max)
-      complex(cp),         intent(inout) :: dVSr_Rloc(lm_max,nRstart:nRstop)
-      complex(cp),         intent(inout) :: dVXir_Rloc(lm_max,nRstart:nRstop)
-      complex(cp),         intent(inout) :: dVxVh_Rloc(lm_max,nRstart:nRstop)
-      complex(cp),         intent(inout) :: dVxBh_Rloc(lm_maxMag,nRstartMag:nRstopMag)
-
-      !-- Output variables
-      complex(cp),         intent(inout) :: dxidt_Rloc(lm_max,nRstart:nRstop)
-      complex(cp),         intent(inout) :: dsdt_Rloc(lm_max,nRstart:nRstop)
-      complex(cp),         intent(inout) :: dwdt_Rloc(lm_max,nRstart:nRstop)
-      complex(cp),         intent(inout) :: djdt_Rloc(lm_max,nRstart:nRstop)
-      type(type_tarray),   intent(inout) :: dbdt_ic, djdt_ic
-      type(type_tscalar),  intent(inout) :: domega_ic_dt, domega_ma_dt
-
-      if ( l_chemical_conv ) call finish_exp_comp_Rdist(w, dVXir_Rloc, dxidt_Rloc)
-
-      if ( l_single_matrix ) then
-         call finish_exp_smat_Rdist(dVSr_Rloc, dsdt_Rloc)
-      else
-         if ( l_heat ) call finish_exp_entropy_Rdist(w, dVSr_Rloc, dsdt_Rloc)
-         if ( l_double_curl ) call finish_exp_pol_Rdist(dVxVh_Rloc, dwdt_Rloc)
-      end if
-
-      if ( .not. l_onset ) then
-         call finish_exp_tor(omega_ma, omega_ic, lorentz_torque_ma,                &
-              &              lorentz_torque_ic, domega_ma_dt%expl(tscheme%istage), &
-              &              domega_ic_dt%expl(tscheme%istage))
-      end if
-
-      if ( l_mag ) call finish_exp_mag_Rdist(dVxBh_Rloc, djdt_Rloc)
-
-      if ( l_cond_ic ) then
-         call finish_exp_mag_ic(b_ic, aj_ic, omega_ic,            &
-              &                 dbdt_ic%expl(:,:,tscheme%istage), &
-              &                 djdt_ic%expl(:,:,tscheme%istage))
-      end if
-
-   end subroutine finish_explicit_assembly_Rdist
-!--------------------------------------------------------------------------------
    subroutine assemble_stage(time, omega_ic, omega_ic1, omega_ma, omega_ma1,        &
               &              dwdt, dzdt, dpdt, dsdt, dxidt, dphidt, dbdt, djdt,     &
               &              dbdt_ic, djdt_ic, domega_ic_dt, domega_ma_dt,          &
@@ -571,125 +342,6 @@ contains
 
    end subroutine assemble_stage
 !--------------------------------------------------------------------------------
-   subroutine assemble_stage_Rdist(time, omega_ic, omega_ic1, omega_ma, omega_ma1,    &
-              &                    dwdt, dzdt, dpdt, dsdt, dxidt, dphidt, dbdt,       &
-              &                    djdt, dbdt_ic, djdt_ic, domega_ic_dt, domega_ma_dt,&
-              &                    lPressNext, lRmsNext, tscheme)
-      !
-      ! This routine is used to call the different assembly stage of the different
-      ! equations. This is only used for a special subset of IMEX-RK schemes that
-      ! have ``tscheme%l_assembly=.true.``
-      !
-
-      !-- Input variables
-      logical,             intent(in) :: lPressNext
-      logical,             intent(in) :: lRmsNext
-      class(type_tscheme), intent(in) :: tscheme
-      real(cp),            intent(in) :: time
-
-      !-- Output variables
-      type(type_tscalar),  intent(inout) :: domega_ic_dt, domega_ma_dt
-      real(cp),            intent(inout) :: omega_ic, omega_ma, omega_ic1, omega_ma1
-      type(type_tarray),   intent(inout) :: dwdt, dzdt, dsdt, dxidt, dpdt, dphidt
-      type(type_tarray),   intent(inout) :: dbdt, djdt, dbdt_ic, djdt_ic
-
-      if ( l_phase_field .and. l_update_phi) then
-         call assemble_phase_Rloc(phi_Rloc, dphidt, tscheme)
-      end if
-      if ( l_chemical_conv .and. l_update_xi ) then
-         call assemble_comp_Rloc(xi_Rloc, dxidt, tscheme)
-      end if
-      if ( l_heat .and. l_update_s ) then
-         call assemble_entropy_Rloc(s_Rloc, ds_Rloc, dsdt, phi_Rloc, tscheme)
-      end if
-
-      if ( l_update_v ) then
-         call assemble_pol_Rloc(block_sze, nblocks, w_Rloc, dw_Rloc, ddw_Rloc, p_Rloc, &
-              &                 dp_Rloc, dwdt, dpdt%expl(:,:,1), tscheme, lPressNext,  &
-              &                 lRmsNext)
-
-         call assemble_tor_Rloc(time, z_Rloc, dz_Rloc, dzdt, domega_ic_dt,    &
-              &                 domega_ma_dt, omega_ic, omega_ma, omega_ic1,  &
-              &                 omega_ma1, lRmsNext, tscheme)
-      end if
-
-      if ( l_mag .and. l_update_b ) then
-         if ( l_mag_par_solve ) then
-            call assemble_mag_Rloc(b_Rloc, db_Rloc, ddb_Rloc, aj_Rloc, dj_Rloc,   &
-                 &                 ddj_Rloc, dbdt, djdt, lRmsNext, tscheme)
-         else
-            call assemble_mag(b_LMloc, db_LMloc, ddb_LMloc, aj_LMloc, dj_LMloc,   &
-                 &            ddj_LMloc, b_ic_LMloc, db_ic_LMloc, ddb_ic_LMloc,   &
-                 &            aj_ic_LMloc, dj_ic_LMloc, ddj_ic_LMloc, dbdt, djdt, &
-                 &            dbdt_ic, djdt_ic, lRmsNext, tscheme)
-         end if
-      end if
-
-   end subroutine assemble_stage_Rdist
-!--------------------------------------------------------------------------------
-   subroutine parallel_solve_phase(block_sze)
-      !
-      ! This subroutine handles the parallel solve of the phase field matrices.
-      ! This needs to be updated before the temperature.
-      !
-      integer, intent(in) :: block_sze ! Size ot the LM blocks
-
-      !-- Local variables
-      integer :: req
-      integer :: start_lm, stop_lm, tag, nlm_block, lms_block
-
-#ifdef WITH_MPI
-      array_of_requests(:)=MPI_REQUEST_NULL
-#endif
-      !$omp parallel default(shared) private(tag, req, start_lm, stop_lm, nlm_block, lms_block)
-      tag = 0
-      req=1
-      do lms_block=1,lm_max,block_sze
-         nlm_block = lm_max-lms_block+1
-         if ( nlm_block > block_sze ) nlm_block=block_sze
-         start_lm=lms_block; stop_lm=lms_block+nlm_block-1
-         call get_openmp_blocks(start_lm,stop_lm)
-         !$omp barrier
-
-         call phiMat_FD%solver_up(phi_ghost, start_lm, stop_lm, nRstart, nRstop, tag, &
-              &                   array_of_requests, req, lms_block, nlm_block)
-         tag = tag+1
-      end do
-
-      do lms_block=1,lm_max,block_sze
-         nlm_block = lm_max-lms_block+1
-         if ( nlm_block > block_sze ) nlm_block=block_sze
-         start_lm=lms_block; stop_lm=lms_block+nlm_block-1
-         call get_openmp_blocks(start_lm,stop_lm)
-         !$omp barrier
-
-         call phiMat_FD%solver_dn(phi_ghost, start_lm, stop_lm, nRstart, nRstop, tag, &
-           &                      array_of_requests, req, lms_block, nlm_block)
-         tag = tag+1
-      end do
-
-      !$omp master
-      do lms_block=1,lm_max,block_sze
-         nlm_block = lm_max-lms_block+1
-         if ( nlm_block > block_sze ) nlm_block=block_sze
-
-         call phiMat_FD%solver_finish(phi_ghost, lms_block, nlm_block, nRstart, &
-              &                       nRstop, tag, array_of_requests, req)
-         tag = tag+1
-      end do
-
-#ifdef WITH_MPI
-      call MPI_Waitall(req-1, array_of_requests(1:req-1), MPI_STATUSES_IGNORE, ierr)
-      if ( ierr /= MPI_SUCCESS ) call abortRun('MPI_Waitall failed in LMLoop')
-      call MPI_Barrier(MPI_COMM_WORLD,ierr)
-#endif
-      !$omp end master
-      !$omp barrier
-
-      !$omp end parallel
-
-   end subroutine parallel_solve_phase
-!--------------------------------------------------------------------------------
    subroutine parallel_solve(block_sze)
       !
       ! This subroutine handles the parallel solve of the time-advance matrices.
@@ -737,14 +389,6 @@ contains
             tag = tag+2
          end if
 
-         if ( l_mag_par_solve ) then
-            call bMat_FD%solver_up(b_ghost, start_lm, stop_lm, nRstart, nRstop, tag, &
-                 &                 array_of_requests, req, lms_block, nlm_block)
-            tag = tag+1
-            call jMat_FD%solver_up(aj_ghost, start_lm, stop_lm, nRstart, nRstop, tag, &
-                 &                 array_of_requests, req, lms_block, nlm_block)
-            tag = tag+1
-         end if
       end do
 
       do lms_block=1,lm_max,block_sze
@@ -775,14 +419,6 @@ contains
             tag = tag+2
          end if
 
-         if ( l_mag_par_solve ) then
-            call bMat_FD%solver_dn(b_ghost, start_lm, stop_lm, nRstart, nRstop, tag, &
-                 &                 array_of_requests, req, lms_block, nlm_block)
-            tag = tag+1
-            call jMat_FD%solver_dn(aj_ghost, start_lm, stop_lm, nRstart, nRstop, tag, &
-                 &                 array_of_requests, req, lms_block, nlm_block)
-            tag = tag+1
-         end if
       end do
 
       !$omp master
@@ -812,14 +448,6 @@ contains
             tag = tag+2
          end if
 
-         if ( l_mag_par_solve ) then
-            call bMat_FD%solver_finish(b_ghost, lms_block, nlm_block, nRstart, nRstop, &
-                 &                     tag, array_of_requests, req)
-            tag = tag+1
-            call jMat_FD%solver_finish(aj_ghost, lms_block, nlm_block, nRstart, nRstop, &
-                 &                     tag, array_of_requests, req)
-            tag = tag+1
-         end if
       end do
 
 #ifdef WITH_MPI

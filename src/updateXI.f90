@@ -15,7 +15,7 @@ module updateXi_mod
    use init_fields, only: topxi, botxi
    use blocking, only: lo_map, lo_sub_map, llm, ulm, st_map
    use horizontal_data, only: hdif_Xi
-   use logic, only: l_finite_diff, l_full_sphere, l_parallel_solve, l_onset
+   use logic, only: l_full_sphere, l_onset
    use parallel_mod, only: rank, chunksize, n_procs, get_openmp_blocks
    use radial_der, only: get_ddr, get_dr, get_dr_Rloc, get_ddr_ghost, exch_ghosts,&
        &                 bulk_to_ghost
@@ -47,9 +47,7 @@ module updateXi_mod
    complex(cp), public, allocatable :: xi_ghost(:,:)
 
    public :: initialize_updateXi, finalize_updateXi, updateXi, assemble_comp,  &
-   &         finish_exp_comp, get_comp_rhs_imp, finish_exp_comp_Rdist,         &
-   &         get_comp_rhs_imp_ghost, updateXi_FD, prepareXi_FD, fill_ghosts_Xi,&
-   &         assemble_comp_Rloc
+   &         finish_exp_comp, get_comp_rhs_imp
 
 contains
 
@@ -58,29 +56,13 @@ contains
       integer :: ll, n_bands
       integer, pointer :: nLMBs2(:)
 
-      if ( .not. l_parallel_solve ) then
          nLMBs2(1:n_procs) => lo_sub_map%nLMBs2
 
-         if ( l_finite_diff ) then
-            allocate( type_bandmat :: xiMat(nLMBs2(1+rank)) )
-
-            if ( ktopxi == 1 .and. kbotxi == 1 .and. rscheme_oc%order == 2 &
-             &   .and. rscheme_oc%order_boundary <= 2 ) then ! Fixed composition at both boundaries
-               n_bands = rscheme_oc%order+1
-            else
-               n_bands = max(2*rscheme_oc%order_boundary+1,rscheme_oc%order+1)
-            end if
-
-            do ll=1,nLMBs2(1+rank)
-               call xiMat(ll)%initialize(n_bands,n_r_max,l_pivot=.true.)
-            end do
-         else
             allocate( type_densemat :: xiMat(nLMBs2(1+rank)) )
 
             do ll=1,nLMBs2(1+rank)
                call xiMat(ll)%initialize(n_r_max,n_r_max,l_pivot=.true.)
             end do
-         end if
 
 #ifdef WITH_PRECOND_S
          allocate(xiMat_fac(n_r_max,nLMBs2(1+rank)))
@@ -96,22 +78,7 @@ contains
          allocate( rhs1(n_r_max,2*lo_sub_map%sizeLMB2max,0:maxThreads-1) )
          bytes_allocated = bytes_allocated + n_r_max*lo_sub_map%sizeLMB2max*&
          &                 maxThreads*SIZEOF_DEF_COMPLEX
-      else ! Parallel solvers are requested
-
-         !-- Create matrix
-         call xiMat_FD%initialize(1,n_r_max,0,l_max)
-
-         !-- Allocate an array with ghost zones
-         allocate( xi_ghost(lm_max, nRstart-1:nRstop+1) )
-         bytes_allocated=bytes_allocated + lm_max*(nRstop-nRstart+3)*SIZEOF_DEF_COMPLEX
-         xi_ghost(:,:)=zero
-
-         allocate( fd_fac_top(0:l_max), fd_fac_bot(0:l_max) )
-         bytes_allocated=bytes_allocated+(l_max+1)*SIZEOF_DEF_REAL
-         fd_fac_top(:)=0.0_cp
-         fd_fac_bot(:)=0.0_cp
-
-      end if
+      
 
       allocate( lXimat(0:l_max) )
       bytes_allocated = bytes_allocated+(l_max+1)*SIZEOF_LOGICAL
@@ -128,7 +95,6 @@ contains
       integer :: ll
 
       deallocate( lXimat )
-      if ( .not. l_parallel_solve ) then
          nLMBs2(1:n_procs) => lo_sub_map%nLMBs2
 
          do ll=1,nLMBs2(1+rank)
@@ -139,10 +105,6 @@ contains
          deallocate(xiMat_fac)
 #endif
          deallocate( rhs1 )
-      else
-         call xiMat_FD%finalize()
-         deallocate( fd_fac_top, fd_fac_bot, xi_ghost )
-      end if
 
    end subroutine finalize_updateXI
 !------------------------------------------------------------------------------
@@ -302,178 +264,6 @@ contains
       end if
 
    end subroutine updateXi
-!------------------------------------------------------------------------------
-   subroutine prepareXi_FD(tscheme, dxidt)
-      !
-      ! This subroutine is used to assemble the r.h.s. of the composition equation
-      ! when parallel F.D solvers are used. Boundary values are set here.
-      !
-
-      !-- Input of variables:
-      class(type_tscheme), intent(in) :: tscheme
-
-      !-- Input/output of scalar fields:
-      type(type_tarray), intent(inout) :: dxidt
-
-      !-- Local variables
-      integer :: nR, lm_start, lm_stop, lm, l, m
-
-      !-- LU factorisation of the matrix if needed
-      if ( .not. lXimat(0) ) then
-         call get_xiMat_Rdist(tscheme,hdif_Xi,xiMat_FD)
-         lXimat(:)=.true.
-      end if
-
-      !$omp parallel default(shared) private(lm_start,lm_stop, nR, l, m, lm)
-      lm_start=1; lm_stop=lm_max
-      call get_openmp_blocks(lm_start,lm_stop)
-      !$omp barrier
-
-      !-- Now assemble the right hand side
-      call tscheme%set_imex_rhs_ghost(xi_ghost, dxidt, lm_start, lm_stop, 1)
-
-      !-- Set boundary conditions
-      if ( nRstart == n_r_cmb ) then
-         nR=n_r_cmb
-         do lm=lm_start,lm_stop
-            l = st_map%lm2l(lm)
-            m = st_map%lm2m(lm)
-            if ( ktopxi == 1 ) then ! Fixed composition
-               xi_ghost(lm,nR)=topxi(l,m)
-            else ! Fixed flux
-               xi_ghost(lm,nR)=xi_ghost(lm,nR)+fd_fac_top(l)*topxi(l,m)
-            end if
-            xi_ghost(lm,nR-1)=zero ! Set ghost zone to zero
-         end do
-      end if
-
-      if ( nRstop == n_r_icb ) then
-         nR=n_r_icb
-         do lm=lm_start,lm_stop
-            l = st_map%lm2l(lm)
-            m = st_map%lm2m(lm)
-
-            if ( l_full_sphere ) then
-               if ( l == 0 ) then
-                  xi_ghost(lm,nR)=xi_ghost(lm,nR)+fd_fac_bot(l)*botxi(l,m)
-               else
-                  xi_ghost(lm,nR)=botxi(l,m)
-               end if
-            else
-               if ( kbotxi == 1 ) then ! Fixed composition
-                  xi_ghost(lm,nR)=botxi(l,m)
-               else
-                 xi_ghost(lm,nR)=xi_ghost(lm,nR)+fd_fac_bot(l)*botxi(l,m)
-               end if
-            end if
-            xi_ghost(lm,nR+1)=zero ! Set ghost zone to zero
-         end do
-      end if
-      !$omp end parallel
-
-   end subroutine prepareXi_FD
-!------------------------------------------------------------------------------
-   subroutine fill_ghosts_Xi(xig)
-      !
-      ! This subroutine is used to fill the ghosts zones that are located at
-      ! nR=n_r_cmb-1 and nR=n_r_icb+1. This is used to properly set the Neuman
-      ! boundary conditions. In case Dirichlet BCs are used, a simple first order
-      ! extrapolation is employed. This is anyway only used for outputs (like Sherwood
-      ! numbers).
-      !
-      complex(cp), intent(inout) :: xig(lm_max,nRstart-1:nRstop+1)
-
-      !-- Local variables
-      integer :: lm, l, m, lm_start, lm_stop
-      real(cp) :: dr
-
-      !$omp parallel default(shared) private(lm_start, lm_stop, l, m, lm)
-      lm_start=1; lm_stop=lm_max
-      call get_openmp_blocks(lm_start,lm_stop)
-      !$omp barrier
-
-      !-- Handle upper boundary
-      dr = r(2)-r(1)
-      if ( nRstart == n_r_cmb ) then
-         do lm=lm_start,lm_stop
-            l = st_map%lm2l(lm)
-            m = st_map%lm2m(lm)
-            if ( ktopxi == 1 ) then
-               xig(lm,nRstart-1)=two*xig(lm,nRstart)-xig(lm,nRstart+1)
-            else
-               xig(lm,nRstart-1)=xig(lm,nRstart+1)-two*dr*topxi(l,m)
-            end if
-         end do
-      end if
-
-      !-- Handle Lower boundary
-      dr = r(n_r_max)-r(n_r_max-1)
-      if ( nRstop == n_r_icb ) then
-         do lm=lm_start,lm_stop
-            l = st_map%lm2l(lm)
-            m = st_map%lm2m(lm)
-            if ( l_full_sphere ) then
-               if (l == 0 ) then
-                  xig(lm,nRstop+1)=xig(lm,nRstop-1)+two*dr*botxi(l,m)
-               else
-                  xig(lm,nRstop+1)=two*xig(lm,nRstop)-xig(lm,nRstop-1)
-               end if
-            else ! Not a full sphere
-               if (kbotxi == 1) then ! Fixed temperature at bottom
-                  xig(lm,nRstop+1)=two*xig(lm,nRstop)-xig(lm,nRstop-1)
-               else
-                  xig(lm,nRstop+1)=xig(lm,nRstop-1)+two*dr*botxi(l,m)
-               end if
-            end if
-         end do
-      end if
-      !$omp end parallel
-
-   end subroutine fill_ghosts_Xi
-!------------------------------------------------------------------------------
-   subroutine updateXi_FD(xi, dxidt, tscheme)
-      !
-      ! This subroutine is called after the linear solves have been completed.
-      ! This is then assembling the linear terms that will be used in the r.h.s.
-      ! for the next iteration.
-      !
-
-      !-- Input of variables:
-      class(type_tscheme), intent(in) :: tscheme
-
-      !-- Input/output of scalar fields:
-      type(type_tarray), intent(inout) :: dxidt
-      complex(cp),       intent(inout) :: xi(lm_max,nRstart:nRstop) ! Composition
-
-      !-- Local variables
-      integer :: nR, lm_start, lm_stop, lm
-
-      !-- Roll the arrays before filling again the first block
-      call tscheme%rotate_imex(dxidt)
-
-      !-- Calculation of the implicit part
-      if ( tscheme%istage == tscheme%nstages ) then
-         call get_comp_rhs_imp_ghost(xi_ghost, dxidt, 1, tscheme%l_imp_calc_rhs(1))
-      else
-         call get_comp_rhs_imp_ghost(xi_ghost, dxidt, tscheme%istage+1,       &
-              &                      tscheme%l_imp_calc_rhs(tscheme%istage+1))
-      end if
-
-      !$omp parallel default(shared) private(lm_start,lm_stop,nR,lm)
-      lm_start=1; lm_stop=lm_max
-      call get_openmp_blocks(lm_start,lm_stop)
-
-      !-- Array copy from xi_ghost to xi
-      !!$omp parallel do simd collapse(2) schedule(simd:static)
-      do nR=nRstart,nRstop
-         do lm=lm_start,lm_stop
-            xi(lm,nR)=xi_ghost(lm,nR)
-         end do
-      end do
-      !!$omp end parallel do simd
-      !$omp end parallel
-
-   end subroutine updateXi_FD
 !------------------------------------------------------------------------------
    subroutine finish_exp_comp(w, dVXirLM, dxi_exp_last)
       !
@@ -651,66 +441,6 @@ contains
 
    end subroutine get_comp_rhs_imp
 !------------------------------------------------------------------------------
-   subroutine get_comp_rhs_imp_ghost(xig, dxidt, istage, l_calc_lin)
-      !
-      ! This subroutine computes the linear terms which enter the r.h.s. of the
-      ! equation for composition. This is the R-distributed version.
-      !
-
-      !-- Input variables
-      integer,             intent(in) :: istage
-      logical,             intent(in) :: l_calc_lin
-
-      !-- Output variable
-      complex(cp),       intent(inout) :: xig(lm_max,nRstart-1:nRstop+1)
-      type(type_tarray), intent(inout) :: dxidt
-
-      !-- Local variables
-      complex(cp) :: dxi(lm_max,nRstart:nRstop) ! Radial derivative of comp
-      complex(cp) :: work_Rloc(lm_max,nRstart:nRstop)
-      integer :: n_r, lm, start_lm, stop_lm, l
-      real(cp) :: dL
-      integer, pointer :: lm2l(:)
-
-      lm2l(1:lm_max) => st_map%lm2l
-
-      !$omp parallel default(shared)  private(start_lm, stop_lm, n_r, lm, l, dL)
-      start_lm=1; stop_lm=lm_max
-      call get_openmp_blocks(start_lm,stop_lm)
-
-      !$omp single
-      call dct_counter%start_count()
-      !$omp end single
-      call get_ddr_ghost(xig, dxi, work_Rloc, lm_max, start_lm, stop_lm,  nRstart, &
-           &             nRstop, rscheme_oc)
-      !$omp single
-      call dct_counter%stop_count(l_increment=.false.)
-      !$omp end single
-      !$omp barrier
-
-      if ( istage == 1 ) then
-         do n_r=nRstart,nRstop
-            do lm=start_lm,stop_lm
-               dxidt%old(lm,n_r,istage) = xig(lm,n_r)
-            end do
-         end do
-      end if
-
-      if ( l_calc_lin ) then
-         do n_r=nRstart,nRstop
-            do lm=start_lm,stop_lm
-               l = lm2l(lm)
-               dL = real(l*(l+1),cp)
-               dxidt%impl(lm,n_r,istage)=                     osc*hdif_Xi(l) *   &
-               &     ( work_Rloc(lm,n_r)+(beta(n_r)+two*or1(n_r)) *  dxi(lm,n_r) &
-               &                                       - dL*or2(n_r)* xig(lm,n_r) )
-            end do
-         end do
-      end if
-      !$omp end parallel
-
-   end subroutine get_comp_rhs_imp_ghost
-!------------------------------------------------------------------------------
    subroutine assemble_comp(xi, dxi, dxidt, tscheme)
       !
       ! This subroutine is used to assemble the chemical composition when an
@@ -829,69 +559,6 @@ contains
 
    end subroutine assemble_comp
 !------------------------------------------------------------------------------
-   subroutine assemble_comp_Rloc(xi, dxidt, tscheme)
-      !
-      ! This subroutine is used when an IMEX Runge-Kutta time scheme with an assembly
-      ! stage is used. This is used when R is distributed.
-      !
-
-      !-- Input variable
-      class(type_tscheme), intent(in) :: tscheme
-
-      !-- Output variables
-      complex(cp),       intent(inout) :: xi(lm_max,nRstart:nRstop)
-      type(type_tarray), intent(inout) :: dxidt
-
-      !-- Local variables
-      integer :: lm, l, m, n_r, start_lm, stop_lm
-      complex(cp) :: work_Rloc(lm_max,nRstart:nRstop)
-
-      call tscheme%assemble_imex(work_Rloc, dxidt)
-
-      !$omp parallel default(shared) private(start_lm, stop_lm, l, m)
-      start_lm=1; stop_lm=lm_max
-      call get_openmp_blocks(start_lm,stop_lm)
-      !$omp barrier
-
-      do n_r=nRstart,nRstop
-         do lm=start_lm,stop_lm
-            m = st_map%lm2m(lm)
-            if ( m == 0 ) then
-               xi(lm,n_r)=cmplx(real(work_Rloc(lm,n_r)),0.0_cp,cp)
-            else
-               xi(lm,n_r)=work_Rloc(lm,n_r)
-            end if
-         end do
-      end do
-
-      if ( ktopxi == 1 .and. nRstart==n_r_cmb ) then
-         do lm=start_lm,stop_lm
-            l = st_map%lm2l(lm)
-            m = st_map%lm2m(lm)
-            xi(lm,nRstart)=topxi(l,m)
-         end do
-      end if
-
-      if ( kbotxi == 1 .and. nRstop==n_r_icb ) then
-         do lm=start_lm,stop_lm
-            l = st_map%lm2l(lm)
-            m = st_map%lm2m(lm)
-            xi(lm,nRstop)=botxi(l,m)
-         end do
-      end if
-
-      call bulk_to_ghost(xi, xi_ghost, 1, nRstart, nRstop, lm_max, start_lm, stop_lm)
-      !$omp end parallel
-
-      call exch_ghosts(xi_ghost, lm_max, nRstart, nRstop, 1)
-      call fill_ghosts_Xi(xi_ghost)
-
-      !-- Finally call the construction of the implicit terms for the first stage
-      !-- of next iteration
-      call get_comp_rhs_imp_ghost(xi_ghost, dxidt, 1, tscheme%l_imp_calc_rhs(1))
-
-   end subroutine assemble_comp_Rloc
-!------------------------------------------------------------------------------
 #ifdef WITH_PRECOND_S
    subroutine get_xiMat(tscheme,l,hdif,xiMat,xiMat_fac)
 #else
@@ -985,84 +652,5 @@ contains
       if ( info /= 0 ) call abortRun('Singular matrix xiMat!')
 
    end subroutine get_xiMat
-!-----------------------------------------------------------------------------
-   subroutine get_xiMat_Rdist(tscheme,hdif,xiMat)
-      !
-      !  Purpose of this subroutine is to contruct the time step matrices
-      !  xiMat(i,j) for the equation for the chemical composition. This is
-      !  used when parallel F.D. solvers are employed.
-      !
-
-      !-- Input variables
-      class(type_tscheme), intent(in) :: tscheme        ! time step
-      real(cp),            intent(in) :: hdif(0:l_max)
-
-      !-- Output variables
-      type(type_tri_par), intent(inout) :: xiMat
-
-      !-- Local variables:
-      integer :: nR, l
-      real(cp) :: dLh
-
-      !----- Bulk points
-      !$omp parallel default(shared) private(nR,l,dLh)
-      !$omp do
-      do nR=1,n_r_max
-         do l=0,l_max
-            dLh=real(l*(l+1),kind=cp)
-            xiMat%diag(l,nR)=one-tscheme%wimp_lin(1)*osc*hdif(l)*(         &
-            &                                       rscheme_oc%ddr(nR,1) + &
-            &           ( beta(nR)+two*or1(nR) )*    rscheme_oc%dr(nR,1) - &
-            &                                        dLh*or2(nR) )
-            xiMat%low(l,nR)=-tscheme%wimp_lin(1)*osc*hdif(l)*(             &
-            &                                       rscheme_oc%ddr(nR,0) + &
-            &           ( beta(nR)+two*or1(nR) )*    rscheme_oc%dr(nR,0) )
-            xiMat%up(l,nR) =-tscheme%wimp_lin(1)*osc*hdif(l)*(             &
-            &                                       rscheme_oc%ddr(nR,2) + &
-            &           ( beta(nR)+two*or1(nR) )*    rscheme_oc%dr(nR,2) )
-         end do
-      end do
-      !$omp end do
-
-      !----- Boundary conditions:
-      !$omp do
-      do l=0,l_max
-         if ( ktopxi == 1 ) then
-            xiMat%diag(l,1)=one
-            xiMat%up(l,1)  =0.0_cp
-            xiMat%low(l,1) =0.0_cp
-         else
-            xiMat%up(l,1)=xiMat%up(l,1)+xiMat%low(l,1)
-            fd_fac_top(l)=two*(r(2)-r(1))*xiMat%low(l,1)
-         end if
-
-         if ( l_full_sphere ) then
-            !dat(n_r_max,:)=rscheme_oc%rnorm*rscheme_oc%drMat(n_r_max,:)
-            if ( l == 0 ) then
-               xiMat%low(l,n_r_max)=xiMat%up(l,n_r_max)+xiMat%low(l,n_r_max)
-               fd_fac_bot(l)=two*(r(n_r_max-1)-r(n_r_max))*xiMat%up(l,n_r_max)
-            else
-               xiMat%diag(l,n_r_max)=one
-               xiMat%up(l,n_r_max)  =0.0_cp
-               xiMat%low(l,n_r_max) =0.0_cp
-            end if
-         else
-            if ( kbotxi == 1 ) then
-               xiMat%diag(l,n_r_max)=one
-               xiMat%up(l,n_r_max)  =0.0_cp
-               xiMat%low(l,n_r_max) =0.0_cp
-            else
-               xiMat%low(l,n_r_max)=xiMat%up(l,n_r_max)+xiMat%low(l,n_r_max)
-               fd_fac_bot(l)=two*(r(n_r_max-1)-r(n_r_max))*xiMat%up(l,n_r_max)
-            end if
-         end if
-      end do
-      !$omp end do
-      !$omp end parallel
-
-      !----- LU decomposition:
-      call xiMat%prepare_mat()
-
-   end subroutine get_xiMat_Rdist
 !-----------------------------------------------------------------------------
 end module updateXi_mod

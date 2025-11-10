@@ -10,8 +10,8 @@ module fields
    use special, only: ampForce
    use truncation, only: lm_max, n_r_max, lm_maxMag, n_r_maxMag, &
        &                 n_r_ic_maxMag, fd_order, fd_order_bound
-   use logic, only: l_chemical_conv, l_finite_diff, l_mag, l_parallel_solve, &
-       &            l_mag_par_solve, l_phase_field
+   use logic, only: l_chemical_conv, l_mag, &
+       &            l_phase_field, l_ehd_dep
    use blocking, only: llm, ulm, llmMag, ulmMag
    use radial_data, only: nRstart, nRstop, nRstartMag, nRstopMag
    use parallel_mod, only: rank
@@ -42,6 +42,12 @@ module fields
    complex(cp), public, allocatable, target :: xi_Rloc_container(:,:,:)
    complex(cp), public, pointer :: xi_LMloc(:,:), dxi_LMloc(:,:)
    complex(cp), public, pointer :: xi_Rloc(:,:), dxi_Rloc(:,:)
+
+   !-- Electric potential:
+   complex(cp), public, allocatable, target :: v_LMloc_container(:,:,:)
+   complex(cp), public, allocatable, target :: v_Rloc_container(:,:,:)
+   complex(cp), public, pointer :: v_LMloc(:,:), dv_LMloc(:,:)
+   complex(cp), public, pointer :: v_Rloc(:,:), dv_Rloc(:,:)
 
    !-- Phase field
    complex(cp), public, allocatable :: phi_LMloc(:,:), phi_Rloc(:,:)
@@ -115,99 +121,6 @@ contains
       db_ic(:,:) =zero
       aj_ic(:,:) =zero
 
-      if ( l_finite_diff .and. fd_order==2 .and. fd_order_bound==2 ) then
-         if ( l_parallel_solve ) then
-            allocate(w_LMloc(llm:ulm,n_r_max), z_LMloc(llm:ulm,n_r_max))
-            allocate(s_LMloc(llm:ulm,n_r_max))
-            w_LMloc(:,:)=zero
-            z_LMloc(:,:)=zero
-            s_LMloc(:,:)=zero
-            if ( l_mag ) then
-               if ( l_mag_par_solve ) then
-                  allocate(aj_LMloc(llm:ulm,n_r_max), b_LMloc(llm:ulm,n_r_max))
-                  aj_LMloc(:,:)=zero
-                  b_LMloc(:,:) =zero
-               else
-                  allocate( flow_LMloc_container(llm:ulm,n_r_max,1:2) )
-                  flow_LMloc_container(:,:,:)=zero
-                  b_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,1)
-                  aj_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,2)
-               end if
-            else
-               allocate ( b_LMloc(1,1), aj_LMloc(1,1) )
-            end if
-         else
-            n_fields = 3
-            if ( l_mag ) n_fields = n_fields+2
-            allocate( flow_LMloc_container(llm:ulm,n_r_max,1:n_fields) )
-            flow_LMloc_container(:,:,:)=zero
-            w_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,1)
-            z_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,2)
-            s_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,3)
-            if ( l_mag ) then
-               b_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,4)
-               aj_LMloc(llm:,1:) => flow_LMloc_container(llm:ulm,1:n_r_max,5)
-            end if
-         end if
-         allocate(dw_LMloc(llm:ulm,n_r_max), ddw_LMloc(llm:ulm,n_r_max))
-         dw_LMloc(:,:) =zero
-         ddw_LMloc(:,:)=zero
-         allocate(dz_LMloc(llm:ulm,n_r_max), ds_LMloc(llm:ulm,n_r_max))
-         dz_LMloc(:,:) =zero
-         ds_LMloc(:,:) =zero
-         allocate(db_LMloc(llmMag:ulmMag,n_r_maxMag))
-         db_LMloc(:,:) =zero
-         allocate(ddb_LMloc(llmMag:ulmMag,n_r_maxMag))
-         ddb_LMloc(:,:)=zero
-         allocate(dj_LMloc(llmMag:ulmMag,n_r_maxMag))
-         dj_LMloc(:,:) =zero
-         allocate(ddj_LMloc(llmMag:ulmMag,n_r_maxMag))
-         ddj_LMloc(:,:)=zero
-
-         if ( l_parallel_solve ) then
-            allocate(w_Rloc(lm_max,nRstart:nRstop), z_Rloc(lm_max,nRstart:nRstop))
-            allocate(s_Rloc(lm_max,nRstart:nRstop))
-            w_Rloc(:,:)=zero
-            z_Rloc(:,:)=zero
-            s_Rloc(:,:)=zero
-            if ( l_mag ) then
-               if ( l_mag_par_solve ) then
-                  allocate(b_Rloc(lm_max,nRstart:nRstop), aj_Rloc(lm_max,nRstart:nRstop))
-                  b_Rloc(:,:) =zero
-                  aj_Rloc(:,:)=zero
-               else
-                  allocate( flow_Rloc_container(1:lm_max,nRstart:nRstop,1:2) )
-                  flow_Rloc_container(:,:,:)=zero
-                  b_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,1)
-                  aj_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,2)
-               end if
-            else
-               allocate ( b_Rloc(1,1), aj_Rloc(1,1) )
-            end if
-         else
-            allocate( flow_Rloc_container(1:lm_max,nRstart:nRstop,1:n_fields) )
-            flow_Rloc_container(:,:,:)=zero
-            w_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,1)
-            z_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,2)
-            s_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,3)
-            if ( l_mag ) then
-               b_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,4)
-               aj_Rloc(1:,nRstart:) => flow_Rloc_container(1:lm_max,nRstart:nRstop,5)
-            end if
-         end if
-         allocate(dw_Rloc(lm_max,nRstart:nRstop), ddw_Rloc(lm_max,nRstart:nRstop))
-         dw_Rloc(:,:) =zero
-         ddw_Rloc(:,:)=zero
-         allocate(dz_Rloc(lm_max,nRstart:nRstop), ds_Rloc(lm_max,nRstart:nRstop))
-         dz_Rloc(:,:) =zero
-         ds_Rloc(:,:) =zero
-         allocate(db_Rloc(lm_maxMag,nRstartMag:nRstopMag))
-         db_Rloc(:,:) =zero
-         allocate(ddb_Rloc(lm_maxMag,nRstartMag:nRstopMag))
-         ddb_Rloc(:,:)=zero
-         allocate(dj_Rloc(lm_maxMag,nRstartMag:nRstopMag))
-         dj_Rloc(:,:) =zero
-      else
          allocate( flow_LMloc_container(llm:ulm,n_r_max,1:5) )
          flow_LMloc_container(:,:,:)=zero
          w_LMloc(llm:,1:)   => flow_LMloc_container(llm:ulm,1:n_r_max,1)
@@ -251,14 +164,6 @@ contains
          ddb_Rloc(1:,nRstart:) => field_Rloc_container(1:lm_maxMag,nRstart:nRstop,3)
          aj_Rloc(1:,nRstart:)  => field_Rloc_container(1:lm_maxMag,nRstart:nRstop,4)
          dj_Rloc(1:,nRstart:)  => field_Rloc_container(1:lm_maxMag,nRstart:nRstop,5)
-      end if
-
-      if ( l_mag_par_solve ) then
-         allocate(ddj_Rloc(lm_maxMag,nRstartMag:nRstopMag))
-         ddj_Rloc(:,:)=zero
-         bytes_allocated = bytes_allocated+(nRstopMag-nRstartMag+1)*lm_maxMag* &
-         &                 SIZEOF_DEF_COMPLEX
-      end if
 
       allocate( press_LMloc_container(llm:ulm,n_r_max,1:2) )
       press_LMloc_container(:,:,:)=zero
@@ -302,6 +207,30 @@ contains
          dxi_Rloc(1:,1:)  => xi_Rloc_container(1:1,1:1,2)
       end if
 
+      !-- Electric potential:
+      if ( l_ehd_dep ) then
+         allocate( v_LMloc_container(llm:ulm,n_r_max,1:2) )
+         v_LMloc_container(:,:,:)=zero
+         v_LMloc(llm:,1:)  => v_LMloc_container(llm:ulm,1:n_r_max,1)
+         dv_LMloc(llm:,1:) => v_LMloc_container(llm:ulm,1:n_r_max,2)
+         allocate( v_Rloc_container(lm_max,nRstart:nRstop,1:2) )
+         v_Rloc_container(:,:,:)=zero
+         v_Rloc(1:,nRstart:)  => v_Rloc_container(1:lm_max,nRstart:nRstop,1)
+         dv_Rloc(1:,nRstart:) => v_Rloc_container(1:lm_max,nRstart:nRstop,2)
+         bytes_allocated = bytes_allocated + &
+                 &                 2*(ulm-llm+1)*n_r_max*SIZEOF_DEF_COMPLEX
+         bytes_allocated = bytes_allocated + &
+                 &                 2*lm_max*(nRstop-nRstart+1)*SIZEOF_DEF_COMPLEX
+      else
+         allocate( v_LMloc_container(1,1,2) ) ! For debugging
+         v_LMloc(1:,1:)  => v_LMloc_container(1:1,1:1,1)
+         dv_LMloc(1:,1:) => v_LMloc_container(1:1,1:1,2)
+         allocate( v_Rloc_container(1,1,2) )
+         v_Rloc(1:,1:)   => v_Rloc_container(1:1,1:1,1)
+         dv_Rloc(1:,1:)  => v_Rloc_container(1:1,1:1,2)
+      end if
+
+
       !-- Phase field
       if ( l_phase_field ) then
          allocate( phi_LMloc(llm:ulm,1:n_r_max) )
@@ -344,12 +273,6 @@ contains
          allocate(bodyForce_LMloc(llm:ulm,n_r_max))
          bodyForce_LMloc(:,:) = zero
          bytes_allocated = bytes_allocated + (ulm-llm+1)*n_r_max*SIZEOF_DEF_COMPLEX
-         if ( l_parallel_solve ) then
-            allocate(bodyForce_Rloc(lm_max,nRstart:nRstop))
-            bodyForce_Rloc(:,:) = zero
-            bytes_allocated = bytes_allocated + lm_max*(nRstop-nRstart+1)*&
-            &                 SIZEOF_DEF_COMPLEX
-         end if
       end if
 
    end subroutine initialize_fields
@@ -361,36 +284,17 @@ contains
 
       deallocate( bICB, b_ic, db_ic, aj_ic )
       deallocate( press_LMloc_container, press_Rloc_container )
-      if ( l_parallel_solve ) then
-         deallocate( w_LMloc, z_LMloc, s_LMloc, w_RLoc, z_Rloc, s_Rloc )
-         if ( l_mag ) then
-            if ( l_mag_par_solve ) then
-               deallocate( b_LMloc, aj_LMloc, b_RLoc, aj_Rloc )
-            else
-               deallocate( flow_Rloc_container, flow_LMloc_container )
-            end if
-         end if
-      else
-         deallocate( flow_Rloc_container, flow_LMloc_container )
-      end if
-      if ( l_finite_diff .and. fd_order==2 .and. fd_order_bound==2 ) then
-         deallocate( dw_LMloc, ddw_LMloc, dz_LMloc, ds_LMloc)
-         deallocate( db_LMloc, ddb_LMloc, dj_LMloc, ddj_LMloc)
-         deallocate( dw_Rloc, ddw_Rloc, dz_Rloc, ds_Rloc)
-         deallocate( db_Rloc, ddb_Rloc, dj_Rloc)
-      else
-         deallocate( s_LMloc_container, s_Rloc_container )
-         deallocate( field_LMloc_container, field_Rloc_container )
-      end if
+      deallocate( flow_Rloc_container, flow_LMloc_container )
+      deallocate( s_LMloc_container, s_Rloc_container )
+      deallocate( field_LMloc_container, field_Rloc_container )
       deallocate( b_ic_LMloc, db_ic_LMloc, ddb_ic_LMloc, aj_ic_LMloc )
       deallocate( dj_ic_LMloc, ddj_ic_LMloc )
       deallocate( xi_LMloc_container, xi_Rloc_container )
+      deallocate( v_LMloc_container, v_Rloc_container )
       deallocate( work_LMloc )
       deallocate( phi_LMloc, phi_Rloc )
-      if ( l_mag_par_solve ) deallocate(ddj_Rloc)
       if (ampForce /= 0.0_cp) then
          deallocate(bodyForce_LMloc)
-         if ( l_parallel_solve ) deallocate(bodyForce_Rloc)
       end if
 
    end subroutine finalize_fields

@@ -10,7 +10,6 @@ module radial_der
    use mem_alloc
    use cosine_transform_odd
    use radial_scheme, only: type_rscheme
-   use logic, only: l_finite_diff
    use parallel_mod
    use useful, only: abortRun
 
@@ -46,12 +45,10 @@ contains
       integer, intent(in) :: llm
       integer, intent(in) :: ulm
 
-      if ( .not. l_finite_diff ) then
          allocate( work_1d_real(n_r_max) )
          allocate( work(1:ulm-llm+1,n_r_max) )
          bytes_allocated = bytes_allocated+n_r_max*SIZEOF_DEF_REAL+&
          &                 n_r_max*(ulm-llm+1)*SIZEOF_DEF_COMPLEX
-      end if
 
    end subroutine initialize_der_arrays
 !------------------------------------------------------------------------------
@@ -60,7 +57,7 @@ contains
       ! Deallocate work arrays
       !
 
-      if ( .not. l_finite_diff ) deallocate( work_1d_real, work )
+      deallocate( work_1d_real, work )
 
    end subroutine finalize_der_arrays
 !------------------------------------------------------------------------------

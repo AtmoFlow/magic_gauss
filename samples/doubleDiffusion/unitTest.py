@@ -61,9 +61,9 @@ class DoubleDiffusion(unittest.TestCase):
         sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
                 stderr=open(os.devnull, 'wb'))
 
-        cmd = '{} {}/input_FD.nml'.format(self.execCmd, self.dir)
-        sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
-                stderr=open(os.devnull, 'wb'))
+        # cmd = '{} {}/input_FD.nml'.format(self.execCmd, self.dir)
+        # sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'),
+        #         stderr=open(os.devnull, 'wb'))
 
         cmd = 'cat e_kin.test_cheb e_kin.test_FD > e_kin.test'
         sp.call(cmd, shell=True, stdout=open(os.devnull, 'wb'))

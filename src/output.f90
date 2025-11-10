@@ -380,8 +380,8 @@ contains
                   eTot   =e_kin+e_mag+e_mag_ic+e_mag_os+eKinIC+eKinMA
                   dtE    =(eTot-eTotOld)/timePassedLog
                   dtEint =dtEint+timePassedLog*(eTot-eTotOld)
-                  write(n_dtE_file,'(ES20.12,3ES16.6)') timeScaled,dtE,   &
-                  &     dtEint/timeNormLog,dtE/eTot
+!                  write(n_dtE_file,'(ES20.12,3ES16.6)') timeScaled,dtE,   &
+!                  &     dtEint/timeNormLog,dtE/eTot
                   if ( l_save_out ) close(n_dtE_file)
                else
                   eTot  =e_kin+e_mag+e_mag_ic+e_mag_os+eKinIC+eKinMA

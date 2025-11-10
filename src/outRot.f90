@@ -16,7 +16,7 @@ module outRot
    use blocking, only: lo_map, lm_balance, llm, ulm, llmMag, ulmMag
    use logic, only: l_AM, l_save_out, l_iner, l_SRIC, l_rot_ic, &
        &            l_SRMA, l_rot_ma, l_mag_LF, l_mag, l_drift, &
-       &            l_finite_diff, l_full_sphere
+       &            l_full_sphere
    use output_data, only: tag
    use constants, only: c_moi_oc, c_moi_ma, c_moi_ic, pi, y11_norm, &
        &            y10_norm, zero, two, third, four, half

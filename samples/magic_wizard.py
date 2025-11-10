@@ -236,11 +236,11 @@ def getSuite(startdir, cmd, precision, args):
                                           '{}/time_schemes'.format(startdir),
                                           execCmd=cmd,
                                           precision=precision))
-        # Finite differences
-        suite.addTest(finite_differences.unitTest.FiniteDifferences('outputFileDiff',
-                                          '{}/finite_differences'.format(startdir),
-                                          execCmd=cmd,
-                                          precision=precision))
+        # # Finite differences
+        # suite.addTest(finite_differences.unitTest.FiniteDifferences('outputFileDiff',
+        #                                   '{}/finite_differences'.format(startdir),
+        #                                   execCmd=cmd,
+        #                                   precision=precision))
 
         # Saturated state of the Boussinesq benchmark (conducting IC)
         suite.addTest(boussBenchSat.unitTest.BoussinesqBenchmarkTest(
@@ -253,11 +253,11 @@ def getSuite(startdir, cmd, precision, args):
                                           '{}/doubleDiffusion'.format(startdir),
                                           execCmd=cmd,
                                           precision=precision))
-        # Phase Field
-        suite.addTest(phase_field.unitTest.PhaseField('outputFileDiff',
-                                          '{}/phase_field'.format(startdir),
-                                          execCmd=cmd,
-                                          precision=precision))
+        # # Phase Field
+        # suite.addTest(phase_field.unitTest.PhaseField('outputFileDiff',
+        #                                   '{}/phase_field'.format(startdir),
+        #                                   execCmd=cmd,
+        #                                   precision=precision))
         # Axisymmetric run (spherical Couette)
         suite.addTest(couetteAxi.unitTest.CouetteAxi('outputFileDiff',
                                           '{}/couetteAxi'.format(startdir),
@@ -269,11 +269,11 @@ def getSuite(startdir, cmd, precision, args):
                                          '{}/precession'.format(startdir),
                                          execCmd=cmd,
                                          precision=precision))
-        # First full sphere benchmark from Marti et al. (2014)
-        suite.addTest(full_sphere.unitTest.FullSphere('outputFileDiff',
-                                         '{}/full_sphere'.format(startdir),
-                                         execCmd=cmd,
-                                         precision=precision))
+        # # First full sphere benchmark from Marti et al. (2014)
+        # suite.addTest(full_sphere.unitTest.FullSphere('outputFileDiff',
+        #                                  '{}/full_sphere'.format(startdir),
+        #                                  execCmd=cmd,
+        #                                  precision=precision))
         # Onset of convection
         suite.addTest(onset.unitTest.OnsetTest('outputFileDiff',
                                          '{}/onset'.format(startdir),

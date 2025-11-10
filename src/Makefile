@@ -379,6 +379,10 @@ updateXI.o            : truncation.o blocking.o horizontal.o time_array.o\
                         phys_param.o radial.o logic.o output_data.o\
                         init_fields.o constants.o mem_alloc.o time_schemes.o\
                         matrices.o $(DCT_OBJS) radial_derivatives.o
+updateV.o             : truncation.o blocking.o horizontal.o time_array.o\
+                        phys_param.o radial.o logic.o output_data.o\
+                        init_fields.o constants.o mem_alloc.o time_schemes.o\
+                        matrices.o $(DCT_OBJS) radial_derivatives.o
 power.o               : truncation.o blocking.o horizontal.o\
                         phys_param.o num_param.o radial.o logic.o\
                         output_data.o outRot.o integration.o useful.o\
